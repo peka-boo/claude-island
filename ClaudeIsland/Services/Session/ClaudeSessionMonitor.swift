@@ -15,6 +15,9 @@ class ClaudeSessionMonitor: ObservableObject {
     @Published var instances: [SessionState] = []
     @Published var pendingInstances: [SessionState] = []
 
+    /// The new HTTP server for hook events (Masko-style)
+    let httpServer = LocalHTTPServer()
+
     private var cancellables = Set<AnyCancellable>()
 
     init() {
@@ -68,10 +71,16 @@ class ClaudeSessionMonitor: ObservableObject {
                 }
             }
         )
+
+        // Also start the new HTTP server (for Global Monitor mode)
+        if AppSettings.hookMonitorEnabled {
+            try? httpServer.start()
+        }
     }
 
     func stopMonitoring() {
         HookSocketServer.shared.stop()
+        httpServer.stop()
     }
 
     // MARK: - Permission Handling
