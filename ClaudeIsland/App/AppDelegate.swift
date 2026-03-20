@@ -67,15 +67,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Mixpanel.mainInstance().track(event: "App Launched")
         Mixpanel.mainInstance().flush()
 
-        HookInstaller.installIfNeeded()
-        NSApplication.shared.setActivationPolicy(.accessory)
+        // Show in Dock (main window app)
+        NSApplication.shared.setActivationPolicy(.regular)
 
-        windowManager = WindowManager()
-        _ = windowManager?.setupNotchWindow()
+        // Hook system — install if Hook Monitor is enabled
+        if AppSettings.hookMonitorEnabled {
+            HookInstaller.installIfNeeded()
+        }
+
+        // Notch — only create if enabled in settings
+        if AppSettings.notchEnabled {
+            windowManager = WindowManager()
+            _ = windowManager?.setupNotchWindow()
+        }
 
         screenObserver = ScreenObserver { [weak self] in
             self?.handleScreenChange()
         }
+
+        // Toggle observers
+        setupToggleObservers()
 
         if updater.canCheckForUpdates {
             updater.checkForUpdates()
@@ -92,9 +103,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Clean up all CLI subprocesses
+        Task {
+            await ClaudeIslandApp.cliManager.terminateAll()
+        }
+
         Mixpanel.mainInstance().flush()
         updateCheckTimer?.invalidate()
         screenObserver = nil
+    }
+
+    // MARK: - Toggle Observers
+
+    private func setupToggleObservers() {
+        NotificationCenter.default.addObserver(
+            forName: .notchToggled,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let enabled = notification.userInfo?["enabled"] as? Bool ?? false
+            if enabled {
+                self?.windowManager = WindowManager()
+                _ = self?.windowManager?.setupNotchWindow()
+            } else {
+                self?.windowManager = nil
+            }
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .hookMonitorToggled,
+            object: nil,
+            queue: .main
+        ) { notification in
+            let enabled = notification.userInfo?["enabled"] as? Bool ?? false
+            if enabled {
+                HookInstaller.installIfNeeded()
+            } else {
+                // TODO: Uninstall hooks when implemented
+            }
+        }
     }
 
     private func getOrCreateDistinctId() -> String {

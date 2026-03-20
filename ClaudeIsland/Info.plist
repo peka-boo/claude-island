@@ -12,8 +12,8 @@
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>CFBundleShortVersionString</key>
     <string>$(MARKETING_VERSION)</string>
-    <key>LSUIElement</key>
-    <true/>
+    <!-- LSUIElement removed: app now shows in Dock, managed via setActivationPolicy -->
+
     <key>NSHumanReadableCopyright</key>
     <string>Copyright 2025. All rights reserved.</string>
 

@@ -38,6 +38,9 @@ enum AppSettings {
 
     private enum Keys {
         static let notificationSound = "notificationSound"
+        static let notchEnabled = "notchEnabled"
+        static let hookMonitorEnabled = "hookMonitorEnabled"
+        static let serverPort = "serverPort"
     }
 
     // MARK: - Notification Sound
@@ -54,5 +57,35 @@ enum AppSettings {
         set {
             defaults.set(newValue.rawValue, forKey: Keys.notificationSound)
         }
+    }
+
+    // MARK: - Dynamic Island (Notch)
+
+    /// Whether the Notch overlay is enabled
+    static var notchEnabled: Bool {
+        get { defaults.object(forKey: Keys.notchEnabled) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.notchEnabled) }
+    }
+
+    // MARK: - Hook Monitor
+
+    /// Whether the global Hook Monitor is enabled (captures all CLI sessions)
+    static var hookMonitorEnabled: Bool {
+        get { defaults.object(forKey: Keys.hookMonitorEnabled) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.hookMonitorEnabled) }
+    }
+
+    // MARK: - HTTP Server Port
+
+    /// Default HTTP server port for Hook events
+    static let defaultServerPort: UInt16 = 49152
+
+    /// Current HTTP server port
+    static var serverPort: UInt16 {
+        get {
+            let value = defaults.integer(forKey: Keys.serverPort)
+            return value > 0 ? UInt16(value) : defaultServerPort
+        }
+        set { defaults.set(Int(newValue), forKey: Keys.serverPort) }
     }
 }
