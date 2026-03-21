@@ -20,7 +20,7 @@ private let logger = Logger(subsystem: "com.claudeisland", category: "HTTPServer
 
 // MARK: - Hook Event (from Bash script)
 
-struct HookEvent: Codable {
+struct HTTPHookEvent: Codable {
     let hookEventName: String?
     let sessionId: String?
     let cwd: String?
@@ -66,10 +66,10 @@ final class LocalHTTPServer {
     private static let maxPortAttempts: UInt16 = 10
 
     /// Callback for hook events (non-permission)
-    var onEventReceived: ((HookEvent) -> Void)?
+    var onEventReceived: ((HTTPHookEvent) -> Void)?
 
     /// Callback for permission requests (connection held open)
-    var onPermissionRequest: ((HookEvent, NWConnection) -> Void)?
+    var onPermissionRequest: ((HTTPHookEvent, NWConnection) -> Void)?
 
     init() {
         self.port = AppSettings.serverPort
@@ -244,7 +244,7 @@ final class LocalHTTPServer {
         // POST /hook
         if firstLine.contains("POST /hook") {
             let decoder = JSONDecoder()
-            if let event = try? decoder.decode(HookEvent.self, from: bodyData) {
+            if let event = try? decoder.decode(HTTPHookEvent.self, from: bodyData) {
                 logger.info("Hook received: \(event.hookEventName ?? "unknown")")
 
                 // PermissionRequest: hold connection open

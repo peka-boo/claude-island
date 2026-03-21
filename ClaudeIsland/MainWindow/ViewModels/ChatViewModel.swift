@@ -144,14 +144,14 @@ final class ChatViewModel {
     // MARK: - Stream Handling
 
     private func setupStreamHandler(threadId: String) async {
-        await cliManager.onStreamEvent = { [weak self] eventThreadId, event in
+        await cliManager.setOnStreamEvent { [weak self] eventThreadId, event in
             guard eventThreadId == threadId else { return }
             Task { @MainActor in
                 self?.handleStreamEvent(event)
             }
         }
 
-        await cliManager.onProcessEnded = { [weak self] endedThreadId in
+        await cliManager.setOnProcessEnded { [weak self] endedThreadId in
             guard endedThreadId == threadId else { return }
             Task { @MainActor in
                 self?.handleProcessEnded()

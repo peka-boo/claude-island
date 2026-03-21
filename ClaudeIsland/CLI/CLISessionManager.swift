@@ -25,10 +25,19 @@ actor CLISessionManager {
     private let parser = CLIStreamParser()
 
     /// Callback for stream events
-    var onStreamEvent: ((String, CLIStreamEvent) -> Void)?
+    private(set) var onStreamEvent: ((String, CLIStreamEvent) -> Void)?
 
     /// Callback for process termination
-    var onProcessEnded: ((String) -> Void)?
+    private(set) var onProcessEnded: ((String) -> Void)?
+
+    /// Setters for callbacks
+    func setOnStreamEvent(_ closure: @escaping (String, CLIStreamEvent) -> Void) {
+        self.onStreamEvent = closure
+    }
+    
+    func setOnProcessEnded(_ closure: @escaping (String) -> Void) {
+        self.onProcessEnded = closure
+    }
 
     /// Path to the claude CLI binary
     private let claudePath: String
@@ -72,7 +81,7 @@ actor CLISessionManager {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: claudePath)
         process.currentDirectoryURL = URL(fileURLWithPath: cwd)
-        process.environment = ProcessInfo.processInfo.environment
+        process.environment = Foundation.ProcessInfo.processInfo.environment
 
         // Set up stdin for the prompt
         let stdinPipe = Pipe()
@@ -113,8 +122,8 @@ actor CLISessionManager {
                     guard let self else { return }
                     let parser = CLIStreamParser()
                     if let event = parser.parseLine(line) {
-                        Task { @MainActor in
-                            self.onStreamEvent?(threadIdCopy, event)
+                        Task {
+                            await self.triggerStreamEvent(threadId: threadIdCopy, event: event)
                         }
                     }
                 }
@@ -149,7 +158,7 @@ actor CLISessionManager {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: claudePath)
         process.currentDirectoryURL = URL(fileURLWithPath: cwd)
-        process.environment = ProcessInfo.processInfo.environment
+        process.environment = Foundation.ProcessInfo.processInfo.environment
 
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
@@ -189,8 +198,8 @@ actor CLISessionManager {
                     guard let self else { return }
                     let parser = CLIStreamParser()
                     if let event = parser.parseLine(line) {
-                        Task { @MainActor in
-                            self.onStreamEvent?(threadIdCopy, event)
+                        Task {
+                            await self.triggerStreamEvent(threadId: threadIdCopy, event: event)
                         }
                     }
                 }
@@ -285,8 +294,20 @@ actor CLISessionManager {
 
     private func handleProcessTermination(threadId: String) {
         activeProcesses.removeValue(forKey: threadId)
+        triggerProcessEnded(threadId: threadId)
+    }
+
+    private func triggerStreamEvent(threadId: String, event: CLIStreamEvent) {
+        let callback = self.onStreamEvent
         Task { @MainActor in
-            onProcessEnded?(threadId)
+            callback?(threadId, event)
+        }
+    }
+
+    private func triggerProcessEnded(threadId: String) {
+        let callback = self.onProcessEnded
+        Task { @MainActor in
+            callback?(threadId)
         }
     }
 }

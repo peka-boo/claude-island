@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import Sparkle
 
 struct AppSettingsView: View {
     @State private var notchEnabled = AppSettings.notchEnabled
