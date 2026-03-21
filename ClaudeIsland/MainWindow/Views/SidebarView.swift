@@ -19,12 +19,14 @@ struct SidebarView: View {
             actionButtonsSection
 
             Divider()
+                .background(Color.white.opacity(0.1))
                 .padding(.horizontal)
 
             // Thread List
             threadListSection
         }
-        .background(.ultraThinMaterial)
+        .background(Color(red: 0.11, green: 0.12, blue: 0.13))
+        .preferredColorScheme(.dark)
     }
 
     // MARK: - Mode Picker
@@ -68,7 +70,11 @@ struct SidebarView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
-            .background(.quaternary.opacity(0.5))
+            .background(Color.white.opacity(0.05))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+            )
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .padding(.horizontal, 12)
 
@@ -84,6 +90,7 @@ struct SidebarView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .tint(TerminalColors.blue)
 
                     Button {
                         viewModel.showImportSheet = true
@@ -93,6 +100,7 @@ struct SidebarView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .tint(.white.opacity(0.6))
                 }
                 .padding(.horizontal, 12)
             }
@@ -180,7 +188,7 @@ struct SidebarView: View {
         HStack(spacing: 6) {
             Image(systemName: "folder.fill")
                 .font(.system(size: 11))
-                .foregroundStyle(.orange)
+                .foregroundStyle(TerminalColors.amber)
             Text(name)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.primary)
@@ -190,25 +198,25 @@ struct SidebarView: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
-                .background(.quaternary)
+                .background(Color.white.opacity(0.1))
                 .clipShape(Capsule())
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
-        .background(.bar)
+        .background(Color(red: 0.11, green: 0.12, blue: 0.13))
     }
 
     private func emptyStateView(icon: String, title: String, subtitle: String) -> some View {
         VStack(spacing: 8) {
             Image(systemName: icon)
                 .font(.system(size: 28))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.white.opacity(0.2))
             Text(title)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.white.opacity(0.4))
             Text(subtitle)
                 .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.white.opacity(0.3))
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
@@ -243,6 +251,8 @@ struct ThreadRowView: View {
     let onSelect: () -> Void
     let onDelete: () -> Void
 
+    @State private var isHovered = false
+
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 8) {
@@ -255,7 +265,7 @@ struct ThreadRowView: View {
                     // Title
                     Text(thread.title ?? "New Chat")
                         .font(.system(size: 13))
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(isSelected ? .white : .white.opacity(0.8))
                         .lineLimit(1)
 
                     HStack(spacing: 4) {
@@ -265,9 +275,9 @@ struct ThreadRowView: View {
                                 Image(systemName: "arrow.triangle.branch")
                                     .font(.system(size: 8))
                                 Text(branch)
-                                    .font(.system(size: 10))
+                                    .font(.system(size: 10, design: .monospaced))
                             }
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.white.opacity(0.5))
                             .lineLimit(1)
                         }
 
@@ -275,10 +285,10 @@ struct ThreadRowView: View {
                         if thread.source != .app {
                             Text(thread.source == .imported ? "imported" : "takeover")
                                 .font(.system(size: 9, weight: .medium))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(TerminalColors.background)
                                 .padding(.horizontal, 4)
                                 .padding(.vertical, 1)
-                                .background(thread.source == .imported ? .blue : .green)
+                                .background(thread.source == .imported ? TerminalColors.blue : TerminalColors.amber)
                                 .clipShape(Capsule())
                         }
                     }
@@ -289,14 +299,15 @@ struct ThreadRowView: View {
                 // Time
                 Text(thread.updatedAt.relativeFormatted)
                     .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.white.opacity(0.4))
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
-            .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
+            .background(isSelected ? Color.white.opacity(0.1) : (isHovered ? Color.white.opacity(0.05) : Color.clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
         .contextMenu {
             Button(role: .destructive) {
                 onDelete()
@@ -308,9 +319,9 @@ struct ThreadRowView: View {
 
     private var statusColor: Color {
         switch thread.status {
-        case .active: return .green
-        case .idle: return .gray
-        case .ended: return .gray.opacity(0.5)
+        case .active: return TerminalColors.green
+        case .idle: return TerminalColors.dim
+        case .ended: return TerminalColors.dimmer
         }
     }
 }
@@ -321,6 +332,8 @@ struct GlobalSessionRowView: View {
     let session: HookSessionInfo
     let onSelect: () -> Void
     let onTakeover: () -> Void
+
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: onSelect) {
@@ -333,21 +346,21 @@ struct GlobalSessionRowView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(session.title ?? session.projectName)
                         .font(.system(size: 13))
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(.white.opacity(0.9))
                         .lineLimit(1)
 
                     HStack(spacing: 4) {
                         Text(session.projectName)
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.5))
 
                         Text("•")
                             .font(.system(size: 8))
-                            .foregroundStyle(.quaternary)
+                            .foregroundStyle(.white.opacity(0.3))
 
                         Text("\(session.messageCount) msgs")
                             .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.white.opacity(0.5))
                     }
                 }
 
@@ -363,12 +376,13 @@ struct GlobalSessionRowView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.mini)
+                    .tint(TerminalColors.green)
                 }
 
                 // Status badge
                 Text(session.status)
                     .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(TerminalColors.background)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 2)
                     .background(globalStatusColor.opacity(0.9))
@@ -376,18 +390,20 @@ struct GlobalSessionRowView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
+            .background(isHovered ? Color.white.opacity(0.05) : Color.clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
     }
 
     private var globalStatusColor: Color {
         switch session.status {
-        case "processing": return .orange
-        case "waitingForInput": return .blue
-        case "waitingForApproval": return .red
-        case "ended": return .gray
-        default: return .gray
+        case "processing": return TerminalColors.amber
+        case "waitingForInput": return TerminalColors.blue
+        case "waitingForApproval": return TerminalColors.red
+        case "ended": return TerminalColors.dim
+        default: return TerminalColors.dim
         }
     }
 }

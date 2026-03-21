@@ -17,11 +17,10 @@ struct ChatContentView: View {
             chatHeader
 
             Divider()
+                .background(Color.white.opacity(0.1))
 
             // Messages
             messageList
-
-            Divider()
 
             // Input
             MessageInputView(
@@ -31,7 +30,8 @@ struct ChatContentView: View {
                 onInterrupt: { Task { await viewModel.interrupt() } }
             )
         }
-        .background(Color(.windowBackgroundColor))
+        .background(Color(red: 0.08, green: 0.08, blue: 0.09))
+        .preferredColorScheme(.dark)
         .task(id: threadId) {
             await viewModel.loadThread(threadId)
         }
@@ -44,6 +44,7 @@ struct ChatContentView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(viewModel.threadInfo?.title ?? "New Chat")
                     .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
                     .lineLimit(1)
 
                 if let branch = viewModel.threadInfo?.gitBranch {
@@ -51,9 +52,9 @@ struct ChatContentView: View {
                         Image(systemName: "arrow.triangle.branch")
                             .font(.system(size: 10))
                         Text(branch)
-                            .font(.system(size: 11))
+                            .font(.system(size: 11, design: .monospaced))
                     }
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.white.opacity(0.5))
                 }
             }
 
@@ -67,16 +68,16 @@ struct ChatContentView: View {
                     Text(String(format: "$%.4f", cost))
                         .font(.system(size: 11, design: .monospaced))
                 }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(TerminalColors.amber)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
-                .background(.quaternary.opacity(0.5))
+                .background(Color.white.opacity(0.1))
                 .clipShape(Capsule())
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background(.bar)
+        .background(Color(red: 0.11, green: 0.12, blue: 0.13))
     }
 
     // MARK: - Message List
@@ -84,7 +85,7 @@ struct ChatContentView: View {
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
+                LazyVStack(alignment: .leading, spacing: 16) {
                     ForEach(viewModel.messages) { message in
                         MessageBubbleView(message: message)
                             .id(message.id)
@@ -102,7 +103,7 @@ struct ChatContentView: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .padding(.vertical, 20)
             }
             .onChange(of: viewModel.messages.count) { _, _ in
                 withAnimation(.easeOut(duration: 0.2)) {
@@ -130,8 +131,9 @@ struct ChatContentView: View {
                 DisclosureGroup {
                     Text(viewModel.currentThinkingText)
                         .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.white.opacity(0.5))
                         .textSelection(.enabled)
+                        .padding(.vertical, 4)
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "brain")
@@ -139,7 +141,7 @@ struct ChatContentView: View {
                         Text("Thinking...")
                             .font(.system(size: 12, weight: .medium))
                     }
-                    .foregroundStyle(.purple)
+                    .foregroundStyle(TerminalColors.magenta)
                 }
             }
 
@@ -147,22 +149,26 @@ struct ChatContentView: View {
             if !viewModel.currentStreamingText.isEmpty {
                 Text(viewModel.currentStreamingText)
                     .font(.system(size: 13))
+                    .foregroundStyle(.white.opacity(0.9))
                     .textSelection(.enabled)
+                    .lineSpacing(2)
             }
 
             // Processing indicator
             HStack(spacing: 6) {
                 ProgressView()
                     .controlSize(.small)
+                    .colorScheme(.dark)
                 Text("Claude is working...")
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.white.opacity(0.5))
             }
+            .padding(.top, 4)
         }
-        .padding(12)
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.purple.opacity(0.05))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .background(TerminalColors.backgroundHover)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     // MARK: - Error Bubble
@@ -170,14 +176,14 @@ struct ChatContentView: View {
     private func errorBubble(_ message: String) -> some View {
         HStack(spacing: 6) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.red)
+                .foregroundStyle(TerminalColors.red)
             Text(message)
                 .font(.system(size: 12))
-                .foregroundStyle(.red)
+                .foregroundStyle(TerminalColors.red)
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.red.opacity(0.08))
+        .background(TerminalColors.red.opacity(0.1))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }

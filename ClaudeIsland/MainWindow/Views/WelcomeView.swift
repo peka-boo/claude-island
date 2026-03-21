@@ -17,23 +17,23 @@ struct WelcomeView: View {
             // Icon
             ZStack {
                 Circle()
-                    .fill(.purple.opacity(0.1))
+                    .fill(TerminalColors.amber.opacity(0.1))
                     .frame(width: 80, height: 80)
 
                 Image(systemName: "sparkles")
                     .font(.system(size: 36))
-                    .foregroundStyle(.purple.opacity(0.7))
+                    .foregroundStyle(TerminalColors.amber)
             }
 
             // Title
             VStack(spacing: 8) {
                 Text("Claude Island")
                     .font(.system(size: 24, weight: .bold, design: .rounded))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(.white)
 
                 Text("Start a conversation or select one from the sidebar")
                     .font(.system(size: 14))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.white.opacity(0.6))
                     .multilineTextAlignment(.center)
             }
 
@@ -48,6 +48,7 @@ struct WelcomeView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
+                .tint(TerminalColors.blue)
 
                 HStack(spacing: 16) {
                     quickActionButton(
@@ -74,28 +75,33 @@ struct WelcomeView: View {
             // Version info
             if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
                 Text("Claude Island v\(version)")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.quaternary)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.3))
                     .padding(.bottom, 16)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.windowBackgroundColor))
+        .background(Color(red: 0.08, green: 0.08, blue: 0.09))
+        .preferredColorScheme(.dark)
     }
 
     private func quickActionButton(icon: String, title: String, subtitle: String) -> some View {
         VStack(spacing: 4) {
             Text(title)
                 .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.white.opacity(0.6))
             Text(subtitle)
                 .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.white.opacity(0.4))
         }
         .frame(width: 70)
         .padding(.vertical, 8)
-        .background(.quaternary.opacity(0.3))
+        .background(Color.white.opacity(0.05))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+        )
     }
 
     private func selectFolder() {

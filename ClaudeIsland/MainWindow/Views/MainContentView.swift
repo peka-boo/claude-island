@@ -38,6 +38,7 @@ struct MainContentView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 900, minHeight: 600)
+        .preferredColorScheme(.dark)
         .onAppear {
             sidebarVM.configure(with: DataStore.shared)
             chatVM.configure(with: DataStore.shared)
