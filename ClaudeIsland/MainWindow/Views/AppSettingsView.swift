@@ -10,35 +10,34 @@ import SwiftUI
 import Sparkle
 
 struct AppSettingsView: View {
-    @State private var notchEnabled = AppSettings.notchEnabled
+    @State private var hookDisplayMode = AppSettings.claudeHookDisplayMode
     @State private var hookMonitorEnabled = AppSettings.hookMonitorEnabled
     @State private var notificationSound = AppSettings.notificationSound
 
     var body: some View {
         Form {
-            // Dynamic Island
-            Section {
-                Toggle(isOn: $notchEnabled) {
-                    Label {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Dynamic Island (Notch)")
-                                .font(.system(size: 13, weight: .medium))
-                            Text("Show session status in the Notch area")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                    } icon: {
-                        Image(systemName: "sparkle.magnifyingglass")
-                            .foregroundStyle(.purple)
+            Section("claude-message") {
+                Picker("claude hook", selection: $hookDisplayMode) {
+                    ForEach(ClaudeHookDisplayMode.allCases, id: \.self) { mode in
+                        Text(ClaudeMessageDisplaySupport.menuTitle(for: mode)).tag(mode)
                     }
                 }
-                .onChange(of: notchEnabled) { _, newValue in
-                    AppSettings.notchEnabled = newValue
-                    NotificationCenter.default.post(
-                        name: .notchToggled,
-                        object: nil,
-                        userInfo: ["enabled": newValue]
-                    )
+                .pickerStyle(.inline)
+                .onChange(of: hookDisplayMode) { _, newValue in
+                    AppSettings.setClaudeHookDisplayMode(newValue)
+                }
+
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "gearshape.fill")
+                        .foregroundStyle(.orange)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("claude hook")
+                            .font(.system(size: 13, weight: .medium))
+                        Text("Popup is the default. Current Notch only runs when you explicitly select it.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 
@@ -59,12 +58,7 @@ struct AppSettingsView: View {
                     }
                 }
                 .onChange(of: hookMonitorEnabled) { _, newValue in
-                    AppSettings.hookMonitorEnabled = newValue
-                    NotificationCenter.default.post(
-                        name: .hookMonitorToggled,
-                        object: nil,
-                        userInfo: ["enabled": newValue]
-                    )
+                    AppSettings.setHookMonitorEnabled(newValue)
                 }
             } footer: {
                 Text("When enabled, installs a hook script into ~/.claude/settings.json to capture events from all CLI sessions. Starts a local HTTP server on port \(AppSettings.serverPort).")
@@ -115,12 +109,20 @@ struct AppSettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 450, height: 420)
+        .onReceive(NotificationCenter.default.publisher(for: .notchToggled)) { _ in
+            syncFromSettings()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .desktopMessageToggled)) { _ in
+            syncFromSettings()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .hookMonitorToggled)) { _ in
+            syncFromSettings()
+        }
     }
-}
 
-// MARK: - Notification Names
-
-extension Notification.Name {
-    static let notchToggled = Notification.Name("notchToggled")
-    static let hookMonitorToggled = Notification.Name("hookMonitorToggled")
+    private func syncFromSettings() {
+        hookDisplayMode = AppSettings.claudeHookDisplayMode
+        hookMonitorEnabled = AppSettings.hookMonitorEnabled
+        notificationSound = AppSettings.notificationSound
+    }
 }

@@ -58,12 +58,14 @@ struct MarkdownText: View {
             SwiftUI.Text(text)
                 .foregroundColor(baseColor)
                 .font(.system(size: fontSize))
+                .textSelection(.enabled)
         } else {
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(Array(children.enumerated()), id: \.offset) { _, child in
                     BlockRenderer(markup: child, baseColor: baseColor, fontSize: fontSize)
                 }
             }
+            .textSelection(.enabled)
         }
     }
 }
@@ -258,6 +260,7 @@ private struct CodeBlockView: View {
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(.white.opacity(0.85))
                 .padding(10)
+                .textSelection(.enabled)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.white.opacity(0.08))

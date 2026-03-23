@@ -7,6 +7,11 @@
 
 import SwiftUI
 
+enum NotchReminderKind: String, Sendable {
+    case waitingForInput
+    case askUserQuestion
+}
+
 struct SessionPhaseHelpers {
     /// Get color for session phase
     static func phaseColor(for phase: SessionPhase) -> Color {
@@ -50,5 +55,17 @@ struct SessionPhaseHelpers {
         if seconds < 3600 { return "\(seconds / 60)m" }
         if seconds < 86400 { return "\(seconds / 3600)h" }
         return "\(seconds / 86400)d"
+    }
+
+    /// Determine whether a phase should use the stronger notch reminder path.
+    static func notchReminderKind(for phase: SessionPhase) -> NotchReminderKind? {
+        switch phase {
+        case .waitingForInput:
+            return .waitingForInput
+        case .waitingForApproval(let ctx) where ctx.toolName == "AskUserQuestion":
+            return .askUserQuestion
+        default:
+            return nil
+        }
     }
 }

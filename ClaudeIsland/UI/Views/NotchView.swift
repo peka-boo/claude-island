@@ -17,11 +17,12 @@ private let cornerRadiusInsets = (
 
 struct NotchView: View {
     @ObservedObject var viewModel: NotchViewModel
-    @StateObject private var sessionMonitor = ClaudeSessionMonitor()
+    @ObservedObject private var sessionMonitor = ClaudeSessionMonitor.shared
     @StateObject private var activityCoordinator = NotchActivityCoordinator.shared
     @ObservedObject private var updateManager = UpdateManager.shared
     @State private var previousPendingIds: Set<String> = []
     @State private var previousWaitingForInputIds: Set<String> = []
+    @State private var previousAskUserQuestionIds: Set<String> = []
     @State private var waitingForInputTimestamps: [String: Date] = [:]  // sessionId -> when it entered waitingForInput
     @State private var isVisible: Bool = false
     @State private var isHovering: Bool = false
@@ -425,62 +426,72 @@ struct NotchView: View {
             viewModel.notchOpen(reason: .notification)
         }
 
+        let askUserQuestionSessions = sessions.filter {
+            SessionPhaseHelpers.notchReminderKind(for: $0.phase) == .askUserQuestion
+        }
+        let currentAskUserQuestionIds = Set(askUserQuestionSessions.map { $0.stableId })
+        let newAskUserQuestionIds = currentAskUserQuestionIds.subtracting(previousAskUserQuestionIds)
+
+        if !newAskUserQuestionIds.isEmpty {
+            let newlyInteractiveSessions = askUserQuestionSessions.filter {
+                newAskUserQuestionIds.contains($0.stableId)
+            }
+            triggerAttentionFeedback(for: newlyInteractiveSessions)
+        }
+
         previousPendingIds = currentIds
+        previousAskUserQuestionIds = currentAskUserQuestionIds
     }
 
     private func handleWaitingForInputChange(_ instances: [SessionState]) {
         // Get sessions that are now waiting for input
         let waitingForInputSessions = instances.filter { $0.phase == .waitingForInput }
-        let currentIds = Set(waitingForInputSessions.map { $0.stableId })
-        let newWaitingIds = currentIds.subtracting(previousWaitingForInputIds)
+        let currentWaitingForInputIds = Set(waitingForInputSessions.map { $0.stableId })
+        let newWaitingIds = currentWaitingForInputIds.subtracting(previousWaitingForInputIds)
 
-        // Track timestamps for newly waiting sessions
         let now = Date()
         for session in waitingForInputSessions where newWaitingIds.contains(session.stableId) {
             waitingForInputTimestamps[session.stableId] = now
         }
 
-        // Clean up timestamps for sessions no longer waiting
-        let staleIds = Set(waitingForInputTimestamps.keys).subtracting(currentIds)
+        let staleIds = Set(waitingForInputTimestamps.keys).subtracting(currentWaitingForInputIds)
         for staleId in staleIds {
             waitingForInputTimestamps.removeValue(forKey: staleId)
         }
 
-        // Bounce the notch when a session newly enters waitingForInput state
         if !newWaitingIds.isEmpty {
-            // Get the sessions that just entered waitingForInput
             let newlyWaitingSessions = waitingForInputSessions.filter { newWaitingIds.contains($0.stableId) }
+            triggerAttentionFeedback(for: newlyWaitingSessions)
 
-            // Play notification sound if the session is not actively focused
-            if let soundName = AppSettings.notificationSound.soundName {
-                // Check if we should play sound (async check for tmux pane focus)
-                Task {
-                    let shouldPlaySound = await shouldPlayNotificationSound(for: newlyWaitingSessions)
-                    if shouldPlaySound {
-                        _ = await MainActor.run {
-                            NSSound(named: soundName)?.play()
-                        }
-                    }
-                }
-            }
-
-            // Trigger bounce animation to get user's attention
-            DispatchQueue.main.async {
-                isBouncing = true
-                // Bounce back after a short delay
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                    isBouncing = false
-                }
-            }
-
-            // Schedule hiding the checkmark after 30 seconds
             DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [self] in
                 // Trigger a UI update to re-evaluate hasWaitingForInput
                 handleProcessingChange()
             }
         }
 
-        previousWaitingForInputIds = currentIds
+        previousWaitingForInputIds = currentWaitingForInputIds
+    }
+
+    private func triggerAttentionFeedback(for sessions: [SessionState]) {
+        guard !sessions.isEmpty else { return }
+
+        if let soundName = AppSettings.notificationSound.soundName {
+            Task {
+                let shouldPlaySound = await shouldPlayNotificationSound(for: sessions)
+                if shouldPlaySound {
+                    _ = await MainActor.run {
+                        NSSound(named: soundName)?.play()
+                    }
+                }
+            }
+        }
+
+        DispatchQueue.main.async {
+            isBouncing = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                isBouncing = false
+            }
+        }
     }
 
     /// Determine if notification sound should play for the given sessions

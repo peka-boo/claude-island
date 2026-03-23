@@ -28,11 +28,28 @@ enum SidebarMode: String, CaseIterable {
 
 // MARK: - ProjectGroup (UI grouping)
 
-struct ProjectGroup: Identifiable {
-    let id: String
-    let name: String
-    let path: String
-    var threads: [ThreadDTO]
+typealias ProjectGroup = SidebarProjectGroup<ThreadDTO>
+
+extension ThreadDTO: SidebarProjectGroupItem {
+    var sidebarProjectId: String? { projectId }
+    var sidebarUpdatedAt: Date { updatedAt }
+}
+
+extension ProjectGroup {
+    init(id: String, name: String, path: String, updatedAt: Date, threads: [ThreadDTO]) {
+        self.init(
+            id: id,
+            name: name,
+            path: path,
+            updatedAt: updatedAt,
+            items: threads
+        )
+    }
+
+    var threads: [ThreadDTO] {
+        get { items }
+        set { items = newValue }
+    }
 }
 
 // MARK: - SidebarViewModel
@@ -41,21 +58,37 @@ struct ProjectGroup: Identifiable {
 @MainActor
 final class SidebarViewModel {
 
+    private static let collapsedProjectsDefaultsKey = "mainWindow.collapsedProjectIDs"
+
     // MARK: - State
 
     var mode: SidebarMode = .mySessions
-    var searchText: String = ""
+    var searchText: String = "" {
+        didSet {
+            applySearch()
+        }
+    }
+    var selectedSessionIdentity: SidebarSessionIdentity?
     var selectedThreadId: String?
     var projects: [ProjectGroup] = []
+    var globalSessionGroups: [GlobalSessionGroup] = []
     var isLoading = false
     var showImportSheet = false
+    var collapsedProjectIDs: Set<String> = Set(
+        UserDefaults.standard.stringArray(forKey: SidebarViewModel.collapsedProjectsDefaultsKey) ?? []
+    )
 
-    // Global monitor sessions (from Hook events)
+    // Global monitor sessions (live + scanned CLI history)
     var globalSessions: [HookSessionInfo] = []
 
     // MARK: - Dependencies
 
     private var dataActor: BackgroundDataActor?
+    private var allProjects: [ProjectGroup] = []
+    private var scannedGlobalSessions: [ImportableSession] = []
+    private var liveGlobalSessions: [HookSessionInfo] = []
+    private var threadsById: [String: ThreadDTO] = [:]
+    private var globalSessionsByNormalizedId: [String: HookSessionInfo] = [:]
 
     // MARK: - Init
 
@@ -72,23 +105,25 @@ final class SidebarViewModel {
         guard let actor = dataActor else { return }
 
         do {
+            async let scannedSessionsTask = CLISessionScanner.scan()
             let allProjects = try await actor.fetchAllProjects()
-            var groups: [ProjectGroup] = []
+            let allThreads = try await actor.fetchAllThreads()
+            let groups = SidebarProjectGroupingSupport.groups(
+                projects: allProjects.map {
+                    SidebarProjectRecord(
+                        id: $0.id,
+                        name: $0.name,
+                        path: $0.path,
+                        updatedAt: $0.updatedAt
+                    )
+                },
+                items: allThreads
+            )
 
-            for project in allProjects {
-                let threads = try await actor.fetchThreads(projectId: project.id)
-                let filtered = filterThreads(threads)
-                if !filtered.isEmpty {
-                    groups.append(ProjectGroup(
-                        id: project.id,
-                        name: project.name,
-                        path: project.path,
-                        threads: filtered
-                    ))
-                }
-            }
-
-            self.projects = groups
+            self.allProjects = groups
+            rebuildThreadIndex(from: groups)
+            scannedGlobalSessions = await scannedSessionsTask
+            updateLiveMonitorSessions(ClaudeSessionMonitor.shared.instances)
         } catch {
             logger.error("Failed to load data: \(error)")
         }
@@ -112,7 +147,7 @@ final class SidebarViewModel {
             )
 
             await loadData()
-            selectedThreadId = threadId
+            selectThread(threadId: threadId, cliSessionId: nil)
             return threadId
         } catch {
             logger.error("Failed to create thread: \(error)")
@@ -126,7 +161,7 @@ final class SidebarViewModel {
         do {
             try await actor.deleteThread(threadId: id)
             if selectedThreadId == id {
-                selectedThreadId = nil
+                clearSelection()
             }
             await loadData()
         } catch {
@@ -134,28 +169,143 @@ final class SidebarViewModel {
         }
     }
 
+    func isProjectCollapsed(_ projectId: String) -> Bool {
+        collapsedProjectIDs.contains(projectId)
+    }
+
+    func toggleProjectCollapse(_ projectId: String) {
+        if collapsedProjectIDs.contains(projectId) {
+            collapsedProjectIDs.remove(projectId)
+        } else {
+            collapsedProjectIDs.insert(projectId)
+        }
+
+        UserDefaults.standard.set(
+            Array(collapsedProjectIDs).sorted(),
+            forKey: SidebarViewModel.collapsedProjectsDefaultsKey
+        )
+    }
+
+    func updateLiveMonitorSessions(_ sessions: [SessionState]) {
+        liveGlobalSessions = sessions.map { session in
+            HookSessionInfo(
+                id: session.sessionId,
+                sessionId: session.sessionId,
+                projectPath: session.cwd,
+                projectName: session.projectName,
+                title: session.displayTitle,
+                gitBranch: nil,
+                status: phaseStatus(for: session.phase),
+                startedAt: session.createdAt,
+                lastEventAt: session.lastActivity,
+                messageCount: session.chatItems.count,
+                source: .live
+            )
+        }
+
+        applySearch()
+    }
+
+    func refreshGlobalSessions() async {
+        scannedGlobalSessions = await CLISessionScanner.scan()
+        updateLiveMonitorSessions(ClaudeSessionMonitor.shared.instances)
+    }
+
+    func refreshThreadSnapshot(_ thread: ThreadDTO?) {
+        guard let thread, threadsById[thread.id] != nil else { return }
+
+        threadsById[thread.id] = thread
+        allProjects = SidebarProjectGroupingSupport.replacingItem(thread, in: allProjects)
+        applySearch()
+    }
+
+    func selectThread(_ thread: ThreadDTO) {
+        selectThread(threadId: thread.id, cliSessionId: thread.cliSessionId)
+    }
+
+    func isSelected(_ thread: ThreadDTO) -> Bool {
+        selectedSessionIdentity == GlobalSessionSupport.selectionIdentity(
+            threadId: thread.id,
+            cliSessionId: thread.cliSessionId
+        )
+    }
+
+    func isSelected(_ session: HookSessionInfo) -> Bool {
+        selectedSessionIdentity == GlobalSessionSupport.selectionIdentity(sessionId: session.sessionId)
+    }
+
+    func displayStatus(for thread: ThreadDTO) -> SidebarSessionStatus {
+        let linkedSession = linkedGlobalSession(for: thread)
+        return GlobalSessionSupport.resolvedStatus(
+            threadStatus: thread.status.rawValue,
+            sessionStatus: linkedSession?.status
+        )
+    }
+
+    func displayStatus(for session: HookSessionInfo) -> SidebarSessionStatus {
+        GlobalSessionSupport.resolvedStatus(
+            threadStatus: "idle",
+            sessionStatus: session.status
+        )
+    }
+
+    func displayLastEventAt(for thread: ThreadDTO) -> Date {
+        GlobalSessionSupport.resolvedLastEventAt(
+            threadUpdatedAt: thread.updatedAt,
+            sessionLastEventAt: linkedGlobalSession(for: thread)?.lastEventAt
+        )
+    }
+
+    func displayTitle(for thread: ThreadDTO) -> String {
+        thread.title ?? linkedGlobalSession(for: thread)?.title ?? "New Chat"
+    }
+
+    func displayGitBranch(for thread: ThreadDTO) -> String? {
+        thread.gitBranch ?? linkedGlobalSession(for: thread)?.gitBranch
+    }
+
+    private func selectThread(threadId: String, cliSessionId: String?) {
+        selectedThreadId = threadId
+        selectedSessionIdentity = GlobalSessionSupport.selectionIdentity(
+            threadId: threadId,
+            cliSessionId: cliSessionId
+        )
+    }
+
     // MARK: - Takeover (Global → My Sessions)
 
-    func takeoverSession(_ session: HookSessionInfo) async -> String? {
+    func openGlobalSession(_ session: HookSessionInfo, switchModeToMySessions: Bool = false) async -> String? {
         guard let actor = dataActor else { return nil }
+        let normalizedSessionId = normalizeCLISessionId(session.sessionId) ?? session.sessionId
 
         do {
-            let projectId = try await actor.findOrCreateProject(path: session.projectPath)
-            let threadId = try await actor.createThread(
-                projectId: projectId,
-                title: session.title,
-                source: .takeover,
-                cliSessionId: session.sessionId,
-                gitBranch: session.gitBranch
-            )
+            let existingThreadId = try await actor.fetchThreadId(cliSessionId: normalizedSessionId)
 
-            // Switch to My Sessions mode
-            mode = .mySessions
+            let threadId: String
+            switch GlobalSessionSupport.openAction(existingThreadId: existingThreadId) {
+            case .openExistingThread(let existingThreadId):
+                threadId = existingThreadId
+            case .createTakeoverThread:
+                let projectId = try await actor.findOrCreateProject(path: session.projectPath)
+                threadId = try await actor.createThread(
+                    projectId: projectId,
+                    title: session.title,
+                    source: .takeover,
+                    cliSessionId: normalizedSessionId,
+                    gitBranch: session.gitBranch
+                )
+                try await actor.recordImport(cliSessionId: normalizedSessionId, threadId: threadId)
+            }
+
+            if switchModeToMySessions {
+                mode = .mySessions
+            }
             selectedThreadId = threadId
+            selectedSessionIdentity = GlobalSessionSupport.selectionIdentity(sessionId: normalizedSessionId)
             await loadData()
             return threadId
         } catch {
-            logger.error("Failed to takeover session: \(error)")
+            logger.error("Failed to open global session: \(error)")
             return nil
         }
     }
@@ -171,6 +321,44 @@ final class SidebarViewModel {
         }
     }
 
+    private func applySearch() {
+        if searchText.isEmpty {
+            projects = allProjects
+        } else {
+            projects = allProjects.compactMap { group in
+                let filteredThreads = filterThreads(group.threads)
+                guard !filteredThreads.isEmpty else { return nil }
+
+                return ProjectGroup(
+                    id: group.id,
+                    name: group.name,
+                    path: group.path,
+                    updatedAt: group.updatedAt,
+                    threads: filteredThreads
+                )
+            }
+        }
+
+        let mergedGlobalSessions = GlobalSessionSupport.mergedSessions(
+            live: liveGlobalSessions,
+            scanned: scannedGlobalSessions,
+            searchText: ""
+        )
+        globalSessionsByNormalizedId = Dictionary(
+            uniqueKeysWithValues: mergedGlobalSessions.map { session in
+                let normalizedSessionId = normalizeCLISessionId(session.sessionId) ?? session.sessionId
+                return (normalizedSessionId, session)
+            }
+        )
+        globalSessions = GlobalSessionSupport.mergedSessions(
+            live: liveGlobalSessions,
+            scanned: scannedGlobalSessions,
+            searchText: searchText
+        )
+        globalSessionGroups = GlobalSessionSupport.groupedSessions(globalSessions)
+        reconcileSelectionState()
+    }
+
     private func detectGitBranch(at path: String) -> String? {
         let headPath = URL(fileURLWithPath: path)
             .appendingPathComponent(".git/HEAD")
@@ -183,20 +371,55 @@ final class SidebarViewModel {
         }
         return String(trimmed.prefix(8)) // Short SHA
     }
-}
 
-// MARK: - HookSessionInfo
+    private func phaseStatus(for phase: SessionPhase) -> String {
+        switch phase {
+        case .idle:
+            return "idle"
+        case .processing:
+            return "processing"
+        case .waitingForInput:
+            return "waitingForInput"
+        case .waitingForApproval:
+            return "waitingForApproval"
+        case .compacting:
+            return "compacting"
+        case .ended:
+            return "ended"
+        }
+    }
 
-/// Represents a session detected by the Hook Monitor (global mode)
-struct HookSessionInfo: Identifiable, Sendable {
-    let id: String  // session_id
-    let sessionId: String
-    let projectPath: String
-    let projectName: String
-    let title: String?
-    let gitBranch: String?
-    let status: String  // "processing", "waitingForInput", "waitingForApproval", "ended"
-    let startedAt: Date
-    var lastEventAt: Date
-    var messageCount: Int
+    private func clearSelection() {
+        selectedThreadId = nil
+        selectedSessionIdentity = nil
+    }
+
+    private func rebuildThreadIndex(from groups: [ProjectGroup]) {
+        threadsById = Dictionary(
+            uniqueKeysWithValues: groups
+                .flatMap(\.threads)
+                .map { ($0.id, $0) }
+        )
+    }
+
+    private func reconcileSelectionState() {
+        guard let selectedThreadId else { return }
+        guard let selectedThread = threadsById[selectedThreadId] else {
+            clearSelection()
+            return
+        }
+
+        selectedSessionIdentity = GlobalSessionSupport.selectionIdentity(
+            threadId: selectedThread.id,
+            cliSessionId: selectedThread.cliSessionId
+        )
+    }
+
+    private func linkedGlobalSession(for thread: ThreadDTO) -> HookSessionInfo? {
+        guard let normalizedSessionId = normalizeCLISessionId(thread.cliSessionId) else {
+            return nil
+        }
+
+        return globalSessionsByNormalizedId[normalizedSessionId]
+    }
 }

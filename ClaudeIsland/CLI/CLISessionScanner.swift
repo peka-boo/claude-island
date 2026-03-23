@@ -13,7 +13,7 @@ private let logger = Logger(subsystem: "com.claudeisland", category: "Scanner")
 // MARK: - Importable Session
 
 struct ImportableSession: Identifiable, Sendable {
-    let id: String           // JSONL filename (acts as session identifier)
+    let id: String           // Claude CLI session identifier
     let projectPath: String  // Original project path
     let projectName: String  // Project folder name
     let jsonlPath: String    // Full path to JSONL file
@@ -53,10 +53,7 @@ enum CLISessionScanner {
             guard let isDir = try? projectDir.resourceValues(forKeys: [.isDirectoryKey]).isDirectory,
                   isDir else { continue }
 
-            // Decode project path from directory name
-            // e.g., "-Users-mac-Code-GITHUB---claude-island" -> "/Users/mac/Code/GITHUB/--/claude-island"
-            let projectPath = decodeProjectPath(projectDir.lastPathComponent)
-            let projectName = URL(fileURLWithPath: projectPath).lastPathComponent
+            let fallbackProjectPath = decodeProjectPath(projectDir.lastPathComponent)
 
             // Find JSONL session files
             guard let files = try? fm.contentsOfDirectory(
@@ -75,9 +72,12 @@ enum CLISessionScanner {
 
                 // Extract metadata from first few lines
                 let metadata = extractMetadata(from: file)
+                let projectPath = metadata.cwd ?? fallbackProjectPath
+                let projectName = URL(fileURLWithPath: projectPath).lastPathComponent
+                let sessionId = normalizeCLISessionId(file.lastPathComponent) ?? file.deletingPathExtension().lastPathComponent
 
                 let session = ImportableSession(
-                    id: file.lastPathComponent,
+                    id: sessionId,
                     projectPath: projectPath,
                     projectName: projectName,
                     jsonlPath: file.path,
@@ -112,6 +112,7 @@ enum CLISessionScanner {
         var messageCount: Int = 0
         var gitBranch: String?
         var version: String?
+        var cwd: String?
     }
 
     /// Extract metadata from the beginning and end of a JSONL file.
@@ -140,24 +141,22 @@ enum CLISessionScanner {
                 meta.version = version
             }
 
+            // Working directory - more reliable than reverse-decoding project folder names.
+            if meta.cwd == nil, let cwd = json["cwd"] as? String {
+                meta.cwd = cwd
+            }
+
             // First user message
             if meta.firstMessage == "No messages",
-               let type = json["type"] as? String, type == "human",
+               let type = json["type"] as? String,
+               (type == "human" || type == "user"),
                let message = json["message"] as? [String: Any],
-               let content = message["content"] as? [[String: Any]] {
-                for block in content {
-                    if let text = block["text"] as? String, !text.isEmpty {
-                        let maxLen = 80
-                        meta.firstMessage = text.count > maxLen
-                            ? String(text.prefix(maxLen)) + "..."
-                            : text
-                        break
-                    }
-                }
+               let content = extractDisplayMessage(from: message) {
+                meta.firstMessage = content
             }
 
             // Git branch (from cwd or metadata)
-            if meta.gitBranch == nil, let cwd = json["cwd"] as? String {
+            if meta.gitBranch == nil, let cwd = meta.cwd ?? (json["cwd"] as? String) {
                 meta.gitBranch = detectGitBranch(at: cwd)
             }
         }
@@ -171,6 +170,42 @@ enum CLISessionScanner {
         }
 
         return meta
+    }
+
+    private static func extractDisplayMessage(from message: [String: Any]) -> String? {
+        if let content = message["content"] as? String {
+            return truncateDisplayMessage(content)
+        }
+
+        if let blocks = message["content"] as? [[String: Any]] {
+            for block in blocks {
+                if let text = block["text"] as? String,
+                   let displayText = truncateDisplayMessage(text) {
+                    return displayText
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private static func truncateDisplayMessage(_ rawText: String) -> String? {
+        let cleaned = rawText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\n", with: " ")
+
+        guard !cleaned.isEmpty,
+              !cleaned.hasPrefix("<command-name>"),
+              !cleaned.hasPrefix("<local-command"),
+              !cleaned.hasPrefix("Caveat:") else {
+            return nil
+        }
+
+        let maxLen = 80
+        if cleaned.count > maxLen {
+            return String(cleaned.prefix(maxLen)) + "..."
+        }
+        return cleaned
     }
 
     private static func detectGitBranch(at path: String) -> String? {

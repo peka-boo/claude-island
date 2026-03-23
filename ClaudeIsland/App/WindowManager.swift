@@ -25,15 +25,18 @@ class WindowManager {
             return nil
         }
 
-        if let existingController = windowController {
-            existingController.window?.orderOut(nil)
-            existingController.window?.close()
-            windowController = nil
-        }
+        tearDownNotchWindow()
 
         windowController = NotchWindowController(screen: screen)
         windowController?.showWindow(nil)
 
         return windowController
+    }
+
+    /// Fully close and release the notch window when Notch mode is disabled.
+    func tearDownNotchWindow() {
+        windowController?.window?.orderOut(nil)
+        windowController?.window?.close()
+        windowController = nil
     }
 }

@@ -69,11 +69,18 @@ actor ConversationParser {
         }
     }
 
+    private nonisolated static var claudeProjectsRootPath: String {
+        let homePath = Foundation.ProcessInfo.processInfo.environment["HOME"]?
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        let resolvedHome = (homePath?.isEmpty == false ? homePath : nil) ?? NSHomeDirectory()
+        return resolvedHome + "/.claude/projects"
+    }
+
     /// Parse a JSONL file to extract conversation info
     /// Uses caching based on file modification time
     func parse(sessionId: String, cwd: String) -> ConversationInfo {
         let projectDir = cwd.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".", with: "-")
-        let sessionFile = NSHomeDirectory() + "/.claude/projects/" + projectDir + "/" + sessionId + ".jsonl"
+        let sessionFile = Self.claudeProjectsRootPath + "/" + projectDir + "/" + sessionId + ".jsonl"
 
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: sessionFile),
@@ -460,7 +467,7 @@ actor ConversationParser {
     /// Build session file path
     private static func sessionFilePath(sessionId: String, cwd: String) -> String {
         let projectDir = cwd.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".", with: "-")
-        return NSHomeDirectory() + "/.claude/projects/" + projectDir + "/" + sessionId + ".jsonl"
+        return Self.claudeProjectsRootPath + "/" + projectDir + "/" + sessionId + ".jsonl"
     }
 
     private func parseMessageLine(_ json: [String: Any], seenToolIds: inout Set<String>, toolIdToName: inout [String: String]) -> ChatMessage? {
@@ -819,36 +826,40 @@ actor ConversationParser {
     }
 
     private static func parseAskUserQuestionResult(_ data: [String: Any]) -> ToolResultData {
-        var questions: [QuestionItem] = []
-        if let questionsArray = data["questions"] as? [[String: Any]] {
-            questions = questionsArray.compactMap { q -> QuestionItem? in
-                guard let question = q["question"] as? String else { return nil }
-                var options: [QuestionOption] = []
-                if let optionsArray = q["options"] as? [[String: Any]] {
-                    options = optionsArray.compactMap { opt -> QuestionOption? in
-                        guard let label = opt["label"] as? String else { return nil }
-                        return QuestionOption(
-                            label: label,
-                            description: opt["description"] as? String
-                        )
-                    }
+        let prompt = AskUserQuestionPromptParser.parse(data)
+        let questions = prompt?.questions.map { item in
+            QuestionItem(
+                question: item.question,
+                header: item.header,
+                multiSelect: item.multiSelect,
+                options: item.options.map { option in
+                    QuestionOption(
+                        label: option.rawLabel,
+                        description: option.description,
+                        isRecommended: option.isRecommended
+                    )
                 }
-                return QuestionItem(
-                    question: question,
-                    header: q["header"] as? String,
-                    options: options
-                )
-            }
-        }
+            )
+        } ?? []
 
         var answers: [String: String] = [:]
         if let answersDict = data["answers"] as? [String: String] {
             answers = answersDict
         }
 
+        var annotations: [String: QuestionAnswerAnnotation] = [:]
+        if let annotationDict = data["annotations"] as? [String: [String: Any]] {
+            for (question, value) in annotationDict {
+                annotations[question] = QuestionAnswerAnnotation(
+                    notes: value["notes"] as? String
+                )
+            }
+        }
+
         return .askUserQuestion(AskUserQuestionResult(
             questions: questions,
-            answers: answers
+            answers: answers,
+            annotations: annotations
         ))
     }
 
@@ -888,7 +899,7 @@ actor ConversationParser {
         guard !agentId.isEmpty else { return [] }
 
         let projectDir = cwd.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".", with: "-")
-        let agentFile = NSHomeDirectory() + "/.claude/projects/" + projectDir + "/agent-" + agentId + ".jsonl"
+        let agentFile = Self.claudeProjectsRootPath + "/" + projectDir + "/agent-" + agentId + ".jsonl"
 
         guard FileManager.default.fileExists(atPath: agentFile),
               let content = try? String(contentsOfFile: agentFile, encoding: .utf8) else {
@@ -980,7 +991,7 @@ extension ConversationParser {
         guard !agentId.isEmpty else { return [] }
 
         let projectDir = cwd.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".", with: "-")
-        let agentFile = NSHomeDirectory() + "/.claude/projects/" + projectDir + "/agent-" + agentId + ".jsonl"
+        let agentFile = Self.claudeProjectsRootPath + "/" + projectDir + "/agent-" + agentId + ".jsonl"
 
         guard FileManager.default.fileExists(atPath: agentFile),
               let content = try? String(contentsOfFile: agentFile, encoding: .utf8) else {
@@ -1054,4 +1065,3 @@ extension ConversationParser {
         return tools
     }
 }
-

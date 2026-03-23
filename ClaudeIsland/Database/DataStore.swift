@@ -82,6 +82,14 @@ actor BackgroundDataActor {
         return try modelContext.fetch(descriptor).map { ProjectDTO(from: $0) }
     }
 
+    /// Fetch a single project
+    func fetchProject(projectId: String) throws -> ProjectDTO? {
+        let descriptor = FetchDescriptor<Project>(
+            predicate: #Predicate { $0.id == projectId }
+        )
+        return try modelContext.fetch(descriptor).first.map(ProjectDTO.init(from:))
+    }
+
     // MARK: - Thread Operations
 
     /// Create a new thread
@@ -90,7 +98,9 @@ actor BackgroundDataActor {
         title: String? = nil,
         source: ThreadSource = .app,
         cliSessionId: String? = nil,
-        gitBranch: String? = nil
+        gitBranch: String? = nil,
+        createdAt: Date? = nil,
+        updatedAt: Date? = nil
     ) throws -> String {
         let projectDescriptor = FetchDescriptor<Project>(
             predicate: #Predicate { $0.id == projectId }
@@ -103,12 +113,14 @@ actor BackgroundDataActor {
             project: project,
             title: title,
             source: source,
-            cliSessionId: cliSessionId,
-            gitBranch: gitBranch
+            cliSessionId: normalizeCLISessionId(cliSessionId),
+            gitBranch: gitBranch,
+            createdAt: createdAt ?? Date(),
+            updatedAt: updatedAt ?? createdAt ?? Date()
         )
         modelContext.insert(thread)
 
-        project.updatedAt = Date()
+        project.updatedAt = max(project.updatedAt, thread.updatedAt)
         try modelContext.save()
         return thread.id
     }
@@ -130,6 +142,29 @@ actor BackgroundDataActor {
         return try modelContext.fetch(descriptor).map { ThreadDTO(from: $0) }
     }
 
+    /// Fetch a single thread
+    func fetchThread(threadId: String) throws -> ThreadDTO? {
+        let descriptor = FetchDescriptor<Thread>(
+            predicate: #Predicate { $0.id == threadId }
+        )
+        return try modelContext.fetch(descriptor).first.map(ThreadDTO.init(from:))
+    }
+
+    /// Find the latest thread that already owns a Claude CLI session id.
+    func fetchThreadId(cliSessionId: String) throws -> String? {
+        guard let normalizedId = normalizeCLISessionId(cliSessionId) else {
+            return nil
+        }
+
+        let legacyId = normalizedId + ".jsonl"
+        let descriptor = FetchDescriptor<Thread>(
+            predicate: #Predicate { $0.cliSessionId == normalizedId || $0.cliSessionId == legacyId },
+            sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+        )
+
+        return try modelContext.fetch(descriptor).first?.id
+    }
+
     /// Update thread status
     func updateThreadStatus(threadId: String, status: ThreadStatus) throws {
         let descriptor = FetchDescriptor<Thread>(
@@ -137,6 +172,28 @@ actor BackgroundDataActor {
         )
         guard let thread = try modelContext.fetch(descriptor).first else { return }
         thread.status = status
+        thread.updatedAt = Date()
+        try modelContext.save()
+    }
+
+    /// Update thread runtime metadata without forcing callers to fetch and re-save models.
+    func updateThreadRuntime(
+        threadId: String,
+        status: ThreadStatus? = nil,
+        cliSessionId: String? = nil
+    ) throws {
+        let descriptor = FetchDescriptor<Thread>(
+            predicate: #Predicate { $0.id == threadId }
+        )
+        guard let thread = try modelContext.fetch(descriptor).first else { return }
+
+        if let status {
+            thread.status = status
+        }
+        if let cliSessionId = normalizeCLISessionId(cliSessionId) {
+            thread.cliSessionId = cliSessionId
+        }
+
         thread.updatedAt = Date()
         try modelContext.save()
     }
@@ -165,7 +222,8 @@ actor BackgroundDataActor {
         toolResult: String? = nil,
         costUsd: Double? = nil,
         tokensIn: Int? = nil,
-        tokensOut: Int? = nil
+        tokensOut: Int? = nil,
+        createdAt: Date? = nil
     ) throws -> String {
         let threadDescriptor = FetchDescriptor<Thread>(
             predicate: #Predicate { $0.id == threadId }
@@ -184,7 +242,8 @@ actor BackgroundDataActor {
             toolResult: toolResult,
             costUsd: costUsd,
             tokensIn: tokensIn,
-            tokensOut: tokensOut
+            tokensOut: tokensOut,
+            createdAt: createdAt ?? Date()
         )
         modelContext.insert(message)
 
@@ -192,7 +251,10 @@ actor BackgroundDataActor {
         if let cost = costUsd { thread.totalCostUsd += cost }
         if let tin = tokensIn { thread.totalTokensIn += tin }
         if let tout = tokensOut { thread.totalTokensOut += tout }
-        thread.updatedAt = Date()
+        thread.updatedAt = max(thread.updatedAt, message.createdAt)
+        if let project = thread.project {
+            project.updatedAt = max(project.updatedAt, message.createdAt)
+        }
 
         // Auto-set title from first user message
         if thread.title == nil, role == .user {
@@ -206,7 +268,7 @@ actor BackgroundDataActor {
         return message.id
     }
 
-    /// Fetch messages for a thread
+    /// Fetch all messages for a thread
     func fetchMessages(threadId: String) throws -> [MessageDTO] {
         let descriptor = FetchDescriptor<Message>(
             predicate: #Predicate { $0.thread?.id == threadId },
@@ -215,23 +277,159 @@ actor BackgroundDataActor {
         return try modelContext.fetch(descriptor).map { MessageDTO(from: $0) }
     }
 
+    /// Fetch the latest messages for a thread in ascending display order.
+    func fetchRecentMessages(threadId: String, limit: Int) throws -> [MessageDTO] {
+        try fetchMessagePage(threadId: threadId, limit: limit)
+    }
+
+    /// Fetch messages older than the provided message, keeping ascending display order.
+    func fetchMessagesBefore(
+        threadId: String,
+        beforeMessageId: String,
+        beforeCreatedAt: Date,
+        limit: Int
+    ) throws -> [MessageDTO] {
+        try fetchMessagePage(
+            threadId: threadId,
+            limit: limit,
+            beforeMessageId: beforeMessageId,
+            beforeCreatedAt: beforeCreatedAt
+        )
+    }
+
+    private func fetchMessagePage(
+        threadId: String,
+        limit: Int,
+        beforeMessageId: String? = nil,
+        beforeCreatedAt: Date? = nil
+    ) throws -> [MessageDTO] {
+        guard limit > 0 else { return [] }
+
+        let descriptor: FetchDescriptor<Message>
+        if let beforeMessageId, let beforeCreatedAt {
+            descriptor = FetchDescriptor<Message>(
+                predicate: #Predicate {
+                    $0.thread?.id == threadId &&
+                    (
+                        $0.createdAt < beforeCreatedAt ||
+                        ($0.createdAt == beforeCreatedAt && $0.id < beforeMessageId)
+                    )
+                },
+                sortBy: [
+                    SortDescriptor(\.createdAt, order: .reverse),
+                    SortDescriptor(\.id, order: .reverse)
+                ]
+            )
+        } else {
+            descriptor = FetchDescriptor<Message>(
+                predicate: #Predicate { $0.thread?.id == threadId },
+                sortBy: [
+                    SortDescriptor(\.createdAt, order: .reverse),
+                    SortDescriptor(\.id, order: .reverse)
+                ]
+            )
+        }
+
+        var limitedDescriptor = descriptor
+        limitedDescriptor.fetchLimit = limit
+
+        let page = try modelContext.fetch(limitedDescriptor).map(MessageDTO.init(from:))
+        return Array(page.reversed())
+    }
+
+    /// Clear a thread's stored conversation while preserving the thread itself.
+    func clearThreadConversation(threadId: String) throws {
+        let threadDescriptor = FetchDescriptor<Thread>(
+            predicate: #Predicate { $0.id == threadId }
+        )
+
+        guard let thread = try modelContext.fetch(threadDescriptor).first else {
+            throw DataStoreError.threadNotFound(threadId)
+        }
+
+        let messageDescriptor = FetchDescriptor<Message>(
+            predicate: #Predicate { $0.thread?.id == threadId }
+        )
+
+        let messages = try modelContext.fetch(messageDescriptor)
+        for message in messages {
+            modelContext.delete(message)
+        }
+
+        thread.cliSessionId = nil
+        thread.status = .idle
+        thread.totalCostUsd = 0
+        thread.totalTokensIn = 0
+        thread.totalTokensOut = 0
+        thread.updatedAt = Date()
+        if let project = thread.project {
+            project.updatedAt = Date()
+        }
+
+        try modelContext.save()
+    }
+
     // MARK: - Import Tracking
 
     /// Check if a CLI session has already been imported
     func isImported(cliSessionId: String) throws -> Bool {
-        let descriptor = FetchDescriptor<ImportRecord>(
-            predicate: #Predicate { $0.cliSessionId == cliSessionId }
-        )
-        return try modelContext.fetch(descriptor).first != nil
+        guard let normalizedId = normalizeCLISessionId(cliSessionId) else {
+            return false
+        }
+        let matchingRecords = try fetchImportRecords(for: normalizedId)
+        guard !matchingRecords.isEmpty else { return false }
+
+        if let thread = try fetchImportedThread(forNormalizedSessionId: normalizedId) {
+            let threadId = thread.id
+            var needsSave = false
+
+            for record in matchingRecords {
+                if record.cliSessionId != normalizedId {
+                    record.cliSessionId = normalizedId
+                    needsSave = true
+                }
+
+                if record.threadId != threadId {
+                    record.threadId = threadId
+                    needsSave = true
+                }
+            }
+
+            if needsSave {
+                try modelContext.save()
+            }
+
+            return true
+        }
+
+        for record in matchingRecords {
+            modelContext.delete(record)
+        }
+        try modelContext.save()
+        return false
     }
 
     /// Record that a CLI session was imported
     func recordImport(cliSessionId: String, threadId: String) throws {
-        let record = ImportRecord(
-            cliSessionId: cliSessionId,
-            threadId: threadId
-        )
-        modelContext.insert(record)
+        guard let normalizedId = normalizeCLISessionId(cliSessionId) else { return }
+        let matchingRecords = try fetchImportRecords(for: normalizedId)
+
+        if let primaryRecord = matchingRecords.first {
+            primaryRecord.cliSessionId = normalizedId
+            primaryRecord.threadId = threadId
+            primaryRecord.importedAt = Date()
+
+            for duplicate in matchingRecords.dropFirst() {
+                modelContext.delete(duplicate)
+            }
+        } else {
+            let record = ImportRecord(
+                cliSessionId: normalizedId,
+                threadId: threadId
+            )
+            modelContext.insert(record)
+        }
+
         try modelContext.save()
     }
 
@@ -239,6 +437,8 @@ actor BackgroundDataActor {
 
     /// Delete a thread and all its messages
     func deleteThread(threadId: String) throws {
+        try deleteImportRecords(linkedToThreadId: threadId)
+
         let descriptor = FetchDescriptor<Thread>(
             predicate: #Predicate { $0.id == threadId }
         )
@@ -253,8 +453,40 @@ actor BackgroundDataActor {
             predicate: #Predicate { $0.id == projectId }
         )
         guard let project = try modelContext.fetch(descriptor).first else { return }
+
+        let threadIds = project.threads.map(\.id)
+        for threadId in threadIds {
+            try deleteImportRecords(linkedToThreadId: threadId)
+        }
+
         modelContext.delete(project) // Cascade deletes threads → messages
         try modelContext.save()
+    }
+
+    private func fetchImportRecords(for normalizedSessionId: String) throws -> [ImportRecord] {
+        let legacyId = normalizedSessionId + ".jsonl"
+        let descriptor = FetchDescriptor<ImportRecord>(
+            predicate: #Predicate { $0.cliSessionId == normalizedSessionId || $0.cliSessionId == legacyId }
+        )
+        return try modelContext.fetch(descriptor)
+    }
+
+    private func fetchImportedThread(forNormalizedSessionId normalizedSessionId: String) throws -> Thread? {
+        let legacyId = normalizedSessionId + ".jsonl"
+        let descriptor = FetchDescriptor<Thread>(
+            predicate: #Predicate { $0.cliSessionId == normalizedSessionId || $0.cliSessionId == legacyId }
+        )
+        return try modelContext.fetch(descriptor).first
+    }
+
+    private func deleteImportRecords(linkedToThreadId threadId: String) throws {
+        let descriptor = FetchDescriptor<ImportRecord>(
+            predicate: #Predicate { $0.threadId == threadId }
+        )
+
+        for record in try modelContext.fetch(descriptor) {
+            modelContext.delete(record)
+        }
     }
 }
 

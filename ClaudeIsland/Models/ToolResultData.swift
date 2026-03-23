@@ -190,17 +190,24 @@ struct SearchResultItem: Equatable, Sendable {
 struct AskUserQuestionResult: Equatable, Sendable {
     let questions: [QuestionItem]
     let answers: [String: String]
+    let annotations: [String: QuestionAnswerAnnotation]
 }
 
 struct QuestionItem: Equatable, Sendable {
     let question: String
     let header: String?
+    let multiSelect: Bool
     let options: [QuestionOption]
 }
 
 struct QuestionOption: Equatable, Sendable {
     let label: String
     let description: String?
+    let isRecommended: Bool
+}
+
+struct QuestionAnswerAnnotation: Equatable, Sendable {
+    let notes: String?
 }
 
 // MARK: - BashOutput Tool Result

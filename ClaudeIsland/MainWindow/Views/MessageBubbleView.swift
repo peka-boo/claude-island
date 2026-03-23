@@ -2,201 +2,259 @@
 //  MessageBubbleView.swift
 //  ClaudeIsland
 //
-//  Renders a single message bubble (user, assistant, or system).
-//  Supports text, thinking disclosure, and tool use display.
+//  Open transcript styling with minimal containers.
 //
 
 import SwiftUI
 
 struct MessageBubbleView: View {
     let message: MessageDTO
+    @State private var isThinkingExpanded = false
+    @State private var isToolResultExpanded = false
+    @State private var isUserHovered = false
+    @State private var isToolHovered = false
+    @State private var isResultHovered = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            // Avatar
-            avatar
+        Group {
+            switch message.role {
+            case .user:
+                userMessage
+            case .assistant:
+                assistantMessage
+            case .system:
+                systemMessage
+            }
+        }
+        .textSelection(.enabled)
+    }
 
-            VStack(alignment: .leading, spacing: 4) {
-                // Role label
-                Text(roleLabel)
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(roleColor)
-                    .padding(.bottom, 2)
+    private var userMessage: some View {
+        HStack {
+            Spacer(minLength: 140)
 
-                // Thinking (collapsible)
-                if let thinking = message.thinking, !thinking.isEmpty {
-                    DisclosureGroup {
-                        Text(thinking)
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.5))
-                            .textSelection(.enabled)
-                            .padding(.vertical, 4)
-                    } label: {
-                        HStack(spacing: 3) {
-                            Image(systemName: "brain")
-                                .font(.system(size: 10))
-                            Text("Reasoning")
-                                .font(.system(size: 11, weight: .medium))
-                        }
-                        .foregroundStyle(TerminalColors.magenta)
+            VStack(alignment: .trailing, spacing: 8) {
+                if !message.content.isEmpty {
+                    MarkdownText(message.content, color: MainWindowTheme.textPrimary, fontSize: 15)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 13)
+                        .background(
+                            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                                .fill(isUserHovered ? Color.white.opacity(0.13) : Color.white.opacity(0.10))
+                                .shadow(color: .black.opacity(isUserHovered ? 0.16 : 0.08), radius: isUserHovered ? 16 : 8, x: 0, y: isUserHovered ? 8 : 4)
+                        )
+                        .offset(y: isUserHovered ? -1 : 0)
+                        .onHover { isUserHovered = $0 }
+                        .animation(MainWindowTheme.hoverAnimation, value: isUserHovered)
+                }
+
+                metadataRow(alignment: .trailing)
+            }
+        }
+    }
+
+    private var assistantMessage: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if let thinking = message.thinking, !thinking.isEmpty {
+                DisclosureGroup(isExpanded: $isThinkingExpanded) {
+                    MarkdownText(thinking, color: MainWindowTheme.textSecondary, fontSize: 12)
+                        .padding(.top, 8)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "brain")
+                            .font(.system(size: 10, weight: .medium))
+                        Text("Reasoning")
+                            .font(.system(size: 11, weight: .semibold))
                     }
-                    .padding(.bottom, 4)
+                    .foregroundStyle(TerminalColors.magenta)
                 }
-
-                // Tool use
-                if let toolName = message.toolName {
-                    toolBadge(name: toolName, input: message.toolInput)
-                }
-
-                // Main content
-                if !message.content.isEmpty && message.toolName == nil {
-                    Text(message.content)
-                        .font(.system(size: 13))
-                        .foregroundStyle(message.role == .user ? .white : .white.opacity(0.9))
-                        .textSelection(.enabled)
-                        .lineSpacing(4)
-                }
-
-                // Tool result
-                if let result = message.toolResult {
-                    toolResultView(result)
-                }
-
-                // Metadata
-                metadataRow
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color.white.opacity(0.04))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                        )
+                )
+                .animation(MainWindowTheme.panelOpenAnimation, value: isThinkingExpanded)
             }
+
+            if let toolName = message.toolName {
+                toolBadge(name: toolName, input: message.toolInput)
+            }
+
+            if !message.content.isEmpty {
+                MarkdownText(message.content, color: MainWindowTheme.textPrimary, fontSize: 15)
+            }
+
+            if let result = message.toolResult, !result.isEmpty {
+                toolResultView(result)
+            }
+
+            metadataRow(alignment: .leading)
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(bubbleBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .frame(maxWidth: MainWindowTheme.conversationColumnMaxWidth, alignment: .leading)
     }
 
-    // MARK: - Avatar
+    private var systemMessage: some View {
+        HStack {
+            Spacer()
 
-    private var avatar: some View {
-        ZStack {
-            if message.role == .assistant {
-                // Use ClaudeCrabIcon for assistant if available or just sparkles
-                Circle()
-                    .fill(TerminalColors.amber.opacity(0.15))
-                    .frame(width: 28, height: 28)
-                Image(systemName: "sparkles")
-                    .font(.system(size: 12))
-                    .foregroundStyle(TerminalColors.amber)
-            } else if message.role == .user {
-                Circle()
-                    .fill(Color.white.opacity(0.1))
-                    .frame(width: 28, height: 28)
-                Image(systemName: "person.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.8))
-            } else {
-                Circle()
-                    .fill(Color.white.opacity(0.05))
-                    .frame(width: 28, height: 28)
-                Image(systemName: "gearshape.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.5))
-            }
+            Text(message.content)
+                .font(.system(size: 12))
+                .foregroundStyle(MainWindowTheme.textSecondary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(
+                    Capsule()
+                        .fill(Color.white.opacity(0.05))
+                )
+
+            Spacer()
         }
-        .padding(.top, 2)
     }
-
-    // MARK: - Tool Badge
 
     private func toolBadge(name: String, input: String?) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: toolIcon(for: name))
-                    .font(.system(size: 10))
+                    .font(.system(size: 11, weight: .medium))
                 Text(name)
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
             }
-            .foregroundStyle(TerminalColors.amber)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(TerminalColors.amber.opacity(0.15))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .foregroundStyle(MainWindowTheme.accent)
 
             if let input = input, !input.isEmpty, input != "{}" {
                 Text(input)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.6))
-                    .lineLimit(4)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.black.opacity(0.2))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(MainWindowTheme.textSecondary)
+                    .lineLimit(6)
+                    .textSelection(.enabled)
             }
         }
-        .padding(.vertical, 2)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(isToolHovered ? Color.white.opacity(0.06) : Color.white.opacity(0.04))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(isToolHovered ? 0.16 : 0.08), radius: isToolHovered ? 14 : 8, x: 0, y: isToolHovered ? 8 : 4)
+        )
+        .offset(y: isToolHovered ? -1 : 0)
+        .onHover { isToolHovered = $0 }
+        .animation(MainWindowTheme.hoverAnimation, value: isToolHovered)
     }
-
-    // MARK: - Tool Result
 
     private func toolResultView(_ result: String) -> some View {
-        Text(result)
-            .font(.system(size: 11, design: .monospaced))
-            .foregroundStyle(.white.opacity(0.6))
-            .lineLimit(8)
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.black.opacity(0.3))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(Color.white.opacity(0.05), lineWidth: 1)
-            )
-            .padding(.top, 4)
+        let presentation = ChatToolResultPresentationSupport.presentation(for: result)
+
+        return VStack(alignment: .leading, spacing: 10) {
+            if presentation.shouldCollapse {
+                Button {
+                    withAnimation(MainWindowTheme.panelOpenAnimation) {
+                        isToolResultExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: isToolResultExpanded ? "doc.text.fill" : "doc.text")
+                            .font(.system(size: 11, weight: .medium))
+                        Text(presentation.collapseTitle)
+                            .font(.system(size: 12, weight: .semibold))
+
+                        Spacer(minLength: 12)
+
+                        Text("\(presentation.lineCount) lines")
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(MainWindowTheme.textMuted)
+
+                        Image(systemName: isToolResultExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .foregroundStyle(MainWindowTheme.textPrimary)
+                }
+                .buttonStyle(.plain)
+
+                if isToolResultExpanded {
+                    ScrollView([.vertical, .horizontal], showsIndicators: true) {
+                        Text(presentation.fullText)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(MainWindowTheme.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .textSelection(.enabled)
+                    }
+                    .frame(maxHeight: 320)
+                } else {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        Text(presentation.previewText)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(MainWindowTheme.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .textSelection(.enabled)
+                    }
+
+                    if presentation.hiddenLineCount > 0 {
+                        Text("Hidden \(presentation.hiddenLineCount) more lines")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(MainWindowTheme.textMuted)
+                            .padding(.horizontal, 14)
+                    }
+                }
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    Text(presentation.fullText)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(MainWindowTheme.textSecondary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(isResultHovered ? Color.white.opacity(0.05) : Color.white.opacity(0.03))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.07), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(isResultHovered ? 0.14 : 0.06), radius: isResultHovered ? 12 : 6, x: 0, y: isResultHovered ? 6 : 3)
+        )
+        .offset(y: isResultHovered ? -1 : 0)
+        .onHover { isResultHovered = $0 }
+        .animation(MainWindowTheme.hoverAnimation, value: isResultHovered)
+        .animation(MainWindowTheme.panelOpenAnimation, value: isToolResultExpanded)
     }
 
-    // MARK: - Metadata
-
-    private var metadataRow: some View {
-        HStack(spacing: 8) {
+    @ViewBuilder
+    private func metadataRow(alignment: HorizontalAlignment) -> some View {
+        let row = HStack(spacing: 10) {
             Text(message.createdAt, style: .time)
-                .font(.system(size: 10))
-                .foregroundStyle(.white.opacity(0.3))
 
             if let cost = message.costUsd, cost > 0 {
                 Text(String(format: "$%.4f", cost))
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.3))
             }
 
             if let tokensIn = message.tokensIn, let tokensOut = message.tokensOut {
                 Text("\(tokensIn)↓ \(tokensOut)↑")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.3))
             }
         }
-        .padding(.top, 6)
-    }
+        .font(.system(size: 10, design: .monospaced))
+        .foregroundStyle(MainWindowTheme.textMuted)
 
-    // MARK: - Styling
-
-    private var roleLabel: String {
-        switch message.role {
-        case .user: return "You"
-        case .assistant: return "Claude"
-        case .system: return "System"
-        }
-    }
-
-    private var roleColor: Color {
-        switch message.role {
-        case .user: return .white.opacity(0.8)
-        case .assistant: return TerminalColors.amber
-        case .system: return .white.opacity(0.5)
-        }
-    }
-
-    private var bubbleBackground: Color {
-        switch message.role {
-        case .user: return Color.white.opacity(0.05)
-        case .assistant: return TerminalColors.background
-        case .system: return Color.white.opacity(0.02)
+        switch alignment {
+        case .trailing:
+            HStack { Spacer(); row }
+        default:
+            row
         }
     }
 
@@ -209,7 +267,7 @@ struct MessageBubbleView: View {
         case "grep", "search": return "text.magnifyingglass"
         case "websearch": return "globe"
         case "webfetch": return "arrow.down.doc"
-        default: return "wrench.fill"
+        default: return "wrench.adjustable"
         }
     }
 }

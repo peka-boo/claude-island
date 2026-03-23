@@ -24,6 +24,11 @@ struct ChatView: View {
     @State private var newMessageCount: Int = 0
     @State private var previousHistoryCount: Int = 0
     @State private var isBottomVisible: Bool = true
+    @State private var isSendingMessage: Bool = false
+    @State private var messageSendError: String?
+    @State private var interactiveReplyDraft: String = ""
+    @State private var isSendingInteractiveReply: Bool = false
+    @State private var interactiveReplyError: String?
     @FocusState private var isInputFocused: Bool
 
     init(sessionId: String, initialSession: SessionState, sessionMonitor: ClaudeSessionMonitor, viewModel: NotchViewModel) {
@@ -51,6 +56,29 @@ struct ChatView: View {
         session.phase.approvalToolName
     }
 
+    private var currentPermission: PermissionContext? {
+        session.activePermission
+    }
+
+    private var currentPermissionId: String? {
+        currentPermission?.toolUseId
+    }
+
+    private var currentPermissionFormattedInput: String? {
+        currentPermission?.formattedInput
+    }
+
+    private var currentPermissionRawInput: [String: Any]? {
+        currentPermission?.toolInput?.mapValues(\.value)
+    }
+
+    private var interactivePromptPresentation: InteractivePromptPresentation? {
+        InteractivePromptDisplaySupport.presentation(
+            toolName: approvalTool,
+            rawInput: currentPermissionRawInput
+        )
+    }
+
     
     var body: some View {
         ZStack {
@@ -70,8 +98,8 @@ struct ChatView: View {
                 // Approval bar, interactive prompt, or Input bar
                 if let tool = approvalTool {
                     if tool == "AskUserQuestion" {
-                        // Interactive tools - show prompt to answer in terminal
                         interactivePromptBar
+                            .id(currentPermissionId ?? "interactive-prompt")
                             .transition(.asymmetric(
                                 insertion: .opacity.combined(with: .move(edge: .bottom)),
                                 removal: .opacity
@@ -160,15 +188,20 @@ struct ChatView: View {
             }
         }
         .onChange(of: canSendMessages) { _, canSend in
-            // Auto-focus input when tmux messaging becomes available
+            // Auto-focus input when this session becomes messageable.
             if canSend && !isInputFocused {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     isInputFocused = true
                 }
             }
         }
+        .onChange(of: currentPermissionId) { _, _ in
+            interactiveReplyDraft = ""
+            interactiveReplyError = nil
+            isSendingInteractiveReply = false
+        }
         .onAppear {
-            // Auto-focus input when chat opens and tmux messaging is available
+            // Auto-focus input when chat opens and messaging is available.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 if canSendMessages {
                     isInputFocused = true
@@ -353,42 +386,65 @@ struct ChatView: View {
 
     // MARK: - Input Bar
 
-    /// Can send messages only if session is in tmux
+    private var messageTransport: SessionMessageTransport {
+        SessionMessageTransportSupport.transport(
+            isInTmux: session.isInTmux,
+            tty: session.tty,
+            sessionId: session.sessionId,
+            allowsDetachedResume: true
+        )
+    }
+
+    /// Whether this session currently supports sending follow-up messages.
     private var canSendMessages: Bool {
-        session.isInTmux && session.tty != nil
+        SessionMessageTransportSupport.canSendMessages(
+            isInTmux: session.isInTmux,
+            tty: session.tty,
+            sessionId: session.sessionId,
+            allowsDetachedResume: true
+        )
     }
 
     private var inputBar: some View {
-        HStack(spacing: 10) {
-            TextField(canSendMessages ? "Message Claude..." : "Open Claude Code in tmux to enable messaging", text: $inputText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .foregroundColor(canSendMessages ? .white : .white.opacity(0.4))
-                .focused($isInputFocused)
-                .disabled(!canSendMessages)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 20)
-                        .fill(Color.white.opacity(canSendMessages ? 0.08 : 0.04))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 20)
-                                .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
-                        )
-                )
-                .onSubmit {
-                    sendMessage()
-                }
-
-            Button {
-                sendMessage()
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 28))
-                    .foregroundColor(!canSendMessages || inputText.isEmpty ? .white.opacity(0.2) : .white.opacity(0.9))
+        VStack(alignment: .leading, spacing: 6) {
+            if let messageSendError, !messageSendError.isEmpty {
+                Text(messageSendError)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.red.opacity(0.85))
+                    .padding(.horizontal, 4)
             }
-            .buttonStyle(.plain)
-            .disabled(!canSendMessages || inputText.isEmpty)
+
+            HStack(spacing: 10) {
+                TextField(SessionMessageTransportSupport.placeholder(for: messageTransport), text: $inputText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .foregroundColor(canSendMessages ? .white : .white.opacity(0.4))
+                    .focused($isInputFocused)
+                    .disabled(!canSendMessages || isSendingMessage)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 20)
+                            .fill(Color.white.opacity(canSendMessages ? 0.08 : 0.04))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 20)
+                                    .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                            )
+                    )
+                    .onSubmit {
+                        sendMessage()
+                    }
+
+                Button {
+                    sendMessage()
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 28))
+                        .foregroundColor(!canSendMessages || inputText.isEmpty || isSendingMessage ? .white.opacity(0.2) : .white.opacity(0.9))
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSendMessages || inputText.isEmpty || isSendingMessage)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -421,10 +477,26 @@ struct ChatView: View {
 
     /// Bar for interactive tools like AskUserQuestion that need terminal input
     private var interactivePromptBar: some View {
-        ChatInteractivePromptBar(
-            isInTmux: session.isInTmux,
-            onGoToTerminal: { focusTerminal() }
-        )
+        Group {
+            switch interactivePromptPresentation {
+            case .structuredAsk(let prompt):
+                ChatStructuredInteractivePromptBar(
+                    prompt: prompt,
+                    isSending: isSendingInteractiveReply,
+                    errorMessage: interactiveReplyError,
+                    onSubmit: submitStructuredPromptResponse
+                )
+            case .freeformAsk, .none:
+                ChatInteractivePromptBar(
+                    toolInput: currentPermissionFormattedInput,
+                    replyText: $interactiveReplyDraft,
+                    isSending: isSendingInteractiveReply,
+                    errorMessage: interactiveReplyError,
+                    onSubmit: submitInteractivePromptResponse,
+                    onGoToTerminal: { focusTerminal() }
+                )
+            }
+        }
     }
 
     // MARK: - Autoscroll Management
@@ -462,59 +534,75 @@ struct ChatView: View {
         sessionMonitor.denyPermission(sessionId: sessionId, reason: nil)
     }
 
-    private func sendMessage() {
-        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+    private func submitInteractivePromptResponse() {
+        let trimmed = interactiveReplyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
 
-        inputText = ""
+        sendInteractiveResponse(trimmed) {
+            interactiveReplyDraft = ""
+        }
+    }
 
-        // Resume autoscroll when user sends a message
-        resumeAutoscroll()
-        shouldScrollToBottom = true
+    private func submitStructuredPromptResponse(_ submission: AskUserQuestionSubmission) {
+        sendInteractiveResponse(submission.responseText)
+    }
 
-        // Don't add to history here - it will be synced from JSONL when UserPromptSubmit event fires
+    private func sendInteractiveResponse(_ message: String, onSuccess: (() -> Void)? = nil) {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !isSendingInteractiveReply else {
+            return
+        }
+
+        isSendingInteractiveReply = true
+        interactiveReplyError = nil
+
         Task {
-            await sendToSession(text)
-        }
-    }
-
-    private func sendToSession(_ text: String) async {
-        guard session.isInTmux else { return }
-        guard let tty = session.tty else { return }
-
-        if let target = await findTmuxTarget(tty: tty) {
-            _ = await ToolApprovalHandler.shared.sendMessage(text, to: target)
-        }
-    }
-
-    private func findTmuxTarget(tty: String) async -> TmuxTarget? {
-        guard let tmuxPath = await TmuxPathFinder.shared.getTmuxPath() else {
-            return nil
-        }
-
-        do {
-            let output = try await ProcessExecutor.shared.run(
-                tmuxPath,
-                arguments: ["list-panes", "-a", "-F", "#{session_name}:#{window_index}.#{pane_index} #{pane_tty}"]
+            let didSend = await sessionMonitor.submitInteractiveResponse(
+                sessionId: session.sessionId,
+                message: trimmed
             )
 
-            let lines = output.components(separatedBy: "\n")
-            for line in lines {
-                let parts = line.components(separatedBy: " ")
-                guard parts.count >= 2 else { continue }
-
-                let target = parts[0]
-                let paneTty = parts[1].replacingOccurrences(of: "/dev/", with: "")
-
-                if paneTty == tty {
-                    return TmuxTarget(from: target)
+            await MainActor.run {
+                isSendingInteractiveReply = false
+                if didSend {
+                    onSuccess?()
+                } else {
+                    interactiveReplyError = "Failed to send your response back to Claude."
                 }
             }
-        } catch {
-            return nil
         }
+    }
 
-        return nil
+    private func sendMessage() {
+        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !isSendingMessage else { return }
+
+        let originalInput = inputText
+        isSendingMessage = true
+        messageSendError = nil
+
+        Task {
+            let didSend = await sendToSession(text)
+
+            await MainActor.run {
+                isSendingMessage = false
+
+                if didSend {
+                    inputText = ""
+                    resumeAutoscroll()
+                    shouldScrollToBottom = true
+                } else {
+                    messageSendError = "Failed to send message to this Claude session."
+                    if inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        inputText = originalInput
+                    }
+                }
+            }
+        }
+    }
+
+    private func sendToSession(_ text: String) async -> Bool {
+        await MonitoredSessionMessageSender.shared.sendMessage(text, to: session)
     }
 }
 
@@ -523,6 +611,13 @@ struct ChatView: View {
 struct MessageItemView: View {
     let item: ChatHistoryItem
     let sessionId: String
+    let agentDescriptions: [String: String]
+
+    init(item: ChatHistoryItem, sessionId: String, agentDescriptions: [String: String] = [:]) {
+        self.item = item
+        self.sessionId = sessionId
+        self.agentDescriptions = agentDescriptions
+    }
 
     var body: some View {
         switch item.type {
@@ -531,7 +626,7 @@ struct MessageItemView: View {
         case .assistant(let text):
             AssistantMessageView(text: text)
         case .toolCall(let tool):
-            ToolCallView(tool: tool, sessionId: sessionId)
+            ToolCallView(tool: tool, sessionId: sessionId, agentDescriptions: agentDescriptions)
         case .thinking(let text):
             ThinkingView(text: text)
         case .interrupted:
@@ -623,10 +718,17 @@ struct ProcessingIndicatorView: View {
 struct ToolCallView: View {
     let tool: ToolCallItem
     let sessionId: String
+    let agentDescriptions: [String: String]
 
     @State private var pulseOpacity: Double = 0.6
     @State private var isExpanded: Bool = false
     @State private var isHovering: Bool = false
+
+    init(tool: ToolCallItem, sessionId: String, agentDescriptions: [String: String] = [:]) {
+        self.tool = tool
+        self.sessionId = sessionId
+        self.agentDescriptions = agentDescriptions
+    }
 
     private var statusColor: Color {
         switch tool.status {
@@ -669,11 +771,15 @@ struct ToolCallView: View {
 
     private var agentDescription: String? {
         guard tool.name == "AgentOutputTool",
-              let agentId = tool.input["agentId"],
-              let sessionDescriptions = ChatHistoryManager.shared.agentDescriptions[sessionId] else {
+              let agentId = tool.input["agentId"] else {
             return nil
         }
-        return sessionDescriptions[agentId]
+
+        if let description = agentDescriptions[agentId] {
+            return description
+        }
+
+        return ChatHistoryManager.shared.agentDescriptions[sessionId]?[agentId]
     }
 
     var body: some View {
@@ -981,54 +1087,291 @@ struct InterruptedMessageView: View {
 
 // MARK: - Chat Interactive Prompt Bar
 
-/// Bar for interactive tools like AskUserQuestion that need terminal input
+private struct ChatStructuredInteractivePromptBar: View {
+    let prompt: AskUserQuestionPrompt
+    let isSending: Bool
+    let errorMessage: String?
+    let onSubmit: (AskUserQuestionSubmission) -> Void
+
+    @State private var selectedOptions: [String: [String]] = [:]
+    @State private var customAnswers: [String: String] = [:]
+
+    private var draftAnswers: [String: AskUserQuestionDraftAnswer] {
+        Dictionary(uniqueKeysWithValues: prompt.questions.map { question in
+            (
+                question.question,
+                AskUserQuestionDraftAnswer(
+                    selectedOptionLabels: selectedOptions[question.question] ?? [],
+                    customAnswer: trimmedCustomAnswer(for: question),
+                    notes: nil
+                )
+            )
+        })
+    }
+
+    private var isComplete: Bool {
+        prompt.questions.allSatisfy { question in
+            AskUserQuestionWizardSupport.canAdvance(
+                question: question,
+                draft: draftAnswers[question.question]
+            )
+        }
+    }
+
+    private var submission: AskUserQuestionSubmission? {
+        guard isComplete else { return nil }
+        return AskUserQuestionSubmissionBuilder.build(prompt: prompt, drafts: draftAnswers)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Text(MCPToolFormatter.formatToolName("AskUserQuestion"))
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundColor(TerminalColors.amber)
+
+                Text("\(prompt.questions.count) question\(prompt.questions.count == 1 ? "" : "s")")
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.45))
+            }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(Array(prompt.questions.enumerated()), id: \.element.id) { index, question in
+                        structuredQuestionSection(question, index: index)
+                    }
+                }
+            }
+            .frame(maxHeight: 220)
+            .scrollIndicators(.never)
+
+            if let errorMessage, !errorMessage.isEmpty {
+                Text(errorMessage)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.red.opacity(0.85))
+            }
+
+            Button {
+                if let submission {
+                    onSubmit(submission)
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    if isSending {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(.black)
+                    }
+                    Text(isSending ? "Sending..." : "Send Answer")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                .foregroundColor(.black)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 9)
+                .background((submission != nil && !isSending) ? Color.white.opacity(0.95) : Color.white.opacity(0.14))
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(submission == nil || isSending)
+        }
+        .frame(minHeight: 44)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color.black.opacity(0.2))
+    }
+
+    @ViewBuilder
+    private func structuredQuestionSection(_ question: AskUserQuestionPromptItem, index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(AskUserQuestionWizardSupport.stepTitle(for: question, index: index).uppercased())
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.35))
+
+            Text(question.question)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.white.opacity(0.88))
+
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(question.options) { option in
+                    Button {
+                        toggleOption(option, in: question)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 8) {
+                                Image(systemName: isSelected(option, in: question) ? "checkmark.circle.fill" : "circle")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(isSelected(option, in: question) ? TerminalColors.green : .white.opacity(0.35))
+
+                                Text(option.displayLabel)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.9))
+                            }
+
+                            if let description = option.description, !description.isEmpty {
+                                Text(description)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.white.opacity(0.45))
+                                    .padding(.leading, 20)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(isSelected(option, in: question) ? Color.white.opacity(0.10) : Color.white.opacity(0.04))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            TextField("Custom answer (optional)", text: Binding(
+                get: { customAnswers[question.question, default: ""] },
+                set: { customAnswers[question.question] = $0 }
+            ))
+            .textFieldStyle(.plain)
+            .font(.system(size: 12))
+            .foregroundColor(.white.opacity(0.88))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.white.opacity(0.05))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+            )
+        }
+    }
+
+    private func isSelected(_ option: AskUserQuestionPromptOption, in question: AskUserQuestionPromptItem) -> Bool {
+        (selectedOptions[question.question] ?? []).contains(option.rawLabel)
+    }
+
+    private func toggleOption(_ option: AskUserQuestionPromptOption, in question: AskUserQuestionPromptItem) {
+        var selected = selectedOptions[question.question] ?? []
+
+        if question.multiSelect {
+            if let existingIndex = selected.firstIndex(of: option.rawLabel) {
+                selected.remove(at: existingIndex)
+            } else {
+                selected.append(option.rawLabel)
+            }
+        } else {
+            selected = selected == [option.rawLabel] ? [] : [option.rawLabel]
+        }
+
+        selectedOptions[question.question] = selected
+    }
+
+    private func trimmedCustomAnswer(for question: AskUserQuestionPromptItem) -> String? {
+        let trimmed = customAnswers[question.question, default: ""]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+/// Bar for interactive tools like AskUserQuestion that can be answered inline.
 struct ChatInteractivePromptBar: View {
-    let isInTmux: Bool
+    let toolInput: String?
+    @Binding var replyText: String
+    let isSending: Bool
+    let errorMessage: String?
+    let onSubmit: () -> Void
     let onGoToTerminal: () -> Void
 
     @State private var showContent = false
     @State private var showButton = false
 
     var body: some View {
-        HStack(spacing: 12) {
-            // Tool info - same style as approval bar
-            VStack(alignment: .leading, spacing: 2) {
-                Text(MCPToolFormatter.formatToolName("AskUserQuestion"))
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundColor(TerminalColors.amber)
-                Text("Claude Code needs your input")
-                    .font(.system(size: 11))
-                    .foregroundColor(.white.opacity(0.5))
-                    .lineLimit(1)
-            }
-            .opacity(showContent ? 1 : 0)
-            .offset(x: showContent ? 0 : -10)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(MCPToolFormatter.formatToolName("AskUserQuestion"))
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .foregroundColor(TerminalColors.amber)
+                    Text(toolInput ?? "Claude Code needs your input")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.5))
+                        .lineLimit(3)
+                }
+                .opacity(showContent ? 1 : 0)
+                .offset(x: showContent ? 0 : -10)
 
-            Spacer()
+                Spacer()
 
-            // Terminal button on right (similar to Allow button)
-            Button {
-                if isInTmux {
+                Button {
                     onGoToTerminal()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "terminal")
+                            .font(.system(size: 11, weight: .medium))
+                        Text("Terminal")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .foregroundColor(.white.opacity(0.8))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Color.white.opacity(0.1))
+                    .clipShape(Capsule())
                 }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "terminal")
-                        .font(.system(size: 11, weight: .medium))
-                    Text("Terminal")
-                        .font(.system(size: 13, weight: .medium))
-                }
-                .foregroundColor(isInTmux ? .black : .white.opacity(0.4))
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(isInTmux ? Color.white.opacity(0.95) : Color.white.opacity(0.1))
-                .clipShape(Capsule())
+                .buttonStyle(.plain)
+                .opacity(showButton ? 1 : 0)
+                .scaleEffect(showButton ? 1 : 0.8)
             }
-            .buttonStyle(.plain)
-            .opacity(showButton ? 1 : 0)
-            .scaleEffect(showButton ? 1 : 0.8)
+
+            HStack(spacing: 8) {
+                TextField("Reply to Claude...", text: $replyText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .foregroundColor(.white.opacity(0.9))
+                    .disabled(isSending)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.white.opacity(0.06))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                            )
+                    )
+                    .onSubmit(onSubmit)
+
+                Button {
+                    onSubmit()
+                } label: {
+                    HStack(spacing: 6) {
+                        if isSending {
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(.black)
+                        }
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundColor(.black)
+                    .frame(width: 38, height: 38)
+                    .background(
+                        (replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSending)
+                            ? Color.white.opacity(0.16)
+                            : Color.white.opacity(0.95)
+                    )
+                    .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSending)
+            }
+
+            if let errorMessage, !errorMessage.isEmpty {
+                Text(errorMessage)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.red.opacity(0.85))
+            }
         }
-        .frame(minHeight: 44)  // Consistent height with other bars
+        .frame(minHeight: 44)
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(Color.black.opacity(0.2))

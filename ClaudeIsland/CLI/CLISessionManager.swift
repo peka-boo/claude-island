@@ -2,52 +2,44 @@
 //  CLISessionManager.swift
 //  ClaudeIsland
 //
-//  Manages Claude CLI subprocess lifecycle.
-//  Each conversation thread maps to one CLI process using:
-//    claude -p --output-format stream-json --verbose --input-format stream-json
+//  Manages Claude CLI subprocess lifecycle for the main window.
+//  Each send launches a print-mode stream-json turn, optionally resumed from
+//  a persisted Claude session ID.
 //
 
 import Foundation
 import os.log
 
-private let logger = Logger(subsystem: "com.claudeisland", category: "CLI")
+enum CLIPermissionMode: String, Sendable {
+    case `default` = "default"
+    case bypassPermissions = "bypassPermissions"
+}
 
-// MARK: - CLISessionManager
-
-/// Manages active Claude CLI subprocesses.
-/// Uses Swift actor for thread safety.
 actor CLISessionManager {
+    nonisolated private static let logger = Logger(subsystem: "com.claudeisland", category: "CLI")
+    static let shared = CLISessionManager()
 
-    /// Active CLI process info indexed by thread ID
     private var activeProcesses: [String: CLIProcess] = [:]
+    private var stdoutBuffers: [String: String] = [:]
+    private var stderrBuffers: [String: String] = [:]
 
-    /// The stream parser
-    private let parser = CLIStreamParser()
-
-    /// Callback for stream events
     private(set) var onStreamEvent: ((String, CLIStreamEvent) -> Void)?
-
-    /// Callback for process termination
     private(set) var onProcessEnded: ((String) -> Void)?
 
-    /// Setters for callbacks
     func setOnStreamEvent(_ closure: @escaping (String, CLIStreamEvent) -> Void) {
         self.onStreamEvent = closure
     }
-    
+
     func setOnProcessEnded(_ closure: @escaping (String) -> Void) {
         self.onProcessEnded = closure
     }
 
-    /// Path to the claude CLI binary
     private let claudePath: String
 
     init() {
-        // Find claude binary
         if FileManager.default.fileExists(atPath: "/Users/mac/.local/bin/claude") {
             claudePath = "/Users/mac/.local/bin/claude"
         } else {
-            // Fallback: search PATH
             let pipe = Pipe()
             let which = Process()
             which.executableURL = URL(fileURLWithPath: "/usr/bin/which")
@@ -59,36 +51,168 @@ actor CLISessionManager {
             claudePath = String(data: pathData, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? "/usr/local/bin/claude"
         }
-        logger.info("Claude CLI path: \(self.claudePath)")
+        Self.logger.info("Claude CLI path: \(self.claudePath)")
     }
 
     // MARK: - Session Lifecycle
 
-    /// Start a new conversation in the given working directory.
-    /// Returns the CLI session_id once the first event arrives.
-    func startSession(threadId: String, cwd: String, prompt: String) {
+    func runTurn(
+        threadId: String,
+        cwd: String,
+        prompt: String,
+        cliSessionId: String? = nil,
+        sessionName: String? = nil,
+        permissionMode: CLIPermissionMode? = nil
+    ) {
+        _ = launchTurn(
+            threadId: threadId,
+            cwd: cwd,
+            prompt: prompt,
+            cliSessionId: cliSessionId,
+            sessionName: sessionName,
+            permissionMode: permissionMode
+        )
+    }
+
+    func sendDetachedTurn(
+        sessionId: String,
+        cwd: String,
+        prompt: String,
+        permissionMode: CLIPermissionMode? = .default
+    ) -> Bool {
+        guard let detachedThreadId = SessionMessageTransportSupport.detachedThreadId(for: sessionId) else {
+            Self.logger.warning("Detached turn requested without a valid session id")
+            return false
+        }
+
+        let settingsFileURL: URL
+        do {
+            settingsFileURL = try DetachedResumeSettingsSupport.writeSanitizedSettingsFile(cwd: cwd)
+        } catch {
+            Self.logger.error("Failed to build detached resume settings: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+
+        return launchTurn(
+            threadId: detachedThreadId,
+            cwd: cwd,
+            prompt: prompt,
+            cliSessionId: sessionId,
+            sessionName: nil,
+            permissionMode: permissionMode,
+            settingSources: "",
+            settingsFileURL: settingsFileURL
+        )
+    }
+
+    func interruptSession(threadId: String) {
+        guard let cliProcess = activeProcesses[threadId],
+              cliProcess.process.isRunning else { return }
+
+        kill(cliProcess.process.processIdentifier, SIGINT)
+        Self.logger.info("Sent SIGINT to thread \(threadId)")
+    }
+
+    func stopSession(threadId: String) {
+        guard let cliProcess = activeProcesses[threadId] else { return }
+
+        if cliProcess.process.isRunning {
+            cliProcess.process.terminate()
+
+            DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+                if cliProcess.process.isRunning {
+                    kill(cliProcess.process.processIdentifier, SIGKILL)
+                    Self.logger.warning("Force killed process for thread \(threadId)")
+                }
+            }
+        }
+
+        activeProcesses.removeValue(forKey: threadId)
+        stdoutBuffers.removeValue(forKey: threadId)
+        stderrBuffers.removeValue(forKey: threadId)
+        DetachedResumeSettingsSupport.removeSanitizedSettingsFile(at: cliProcess.settingsFileURL)
+    }
+
+    func isActive(threadId: String) -> Bool {
+        activeProcesses[threadId]?.process.isRunning ?? false
+    }
+
+    func terminateAll() {
+        for (threadId, cliProcess) in activeProcesses {
+            if cliProcess.process.isRunning {
+                cliProcess.process.terminate()
+                Self.logger.info("Terminated process for thread \(threadId) on app exit")
+            }
+            DetachedResumeSettingsSupport.removeSanitizedSettingsFile(at: cliProcess.settingsFileURL)
+        }
+        activeProcesses.removeAll()
+        stdoutBuffers.removeAll()
+        stderrBuffers.removeAll()
+    }
+
+    // MARK: - Launching
+
+    @discardableResult
+    private func launchTurn(
+        threadId: String,
+        cwd: String,
+        prompt: String,
+        cliSessionId: String?,
+        sessionName: String?,
+        permissionMode: CLIPermissionMode?,
+        settingSources: String? = nil,
+        settingsFileURL: URL? = nil
+    ) -> Bool {
         guard activeProcesses[threadId] == nil else {
-            logger.warning("Thread \(threadId) already has an active process")
-            return
+            Self.logger.warning("Thread \(threadId) already has an active process")
+            DetachedResumeSettingsSupport.removeSanitizedSettingsFile(at: settingsFileURL)
+            return false
+        }
+
+        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPrompt.isEmpty else {
+            Self.logger.warning("Ignoring empty prompt for thread \(threadId)")
+            DetachedResumeSettingsSupport.removeSanitizedSettingsFile(at: settingsFileURL)
+            return false
         }
 
         var args = [
             "-p",
             "--output-format", "stream-json",
             "--verbose",
+            "--include-partial-messages",
         ]
+
+        if let settingSources {
+            args.append(contentsOf: ["--setting-sources", settingSources])
+        }
+
+        if let settingsFileURL {
+            args.append(contentsOf: ["--settings", settingsFileURL.path])
+        }
+
+        if let permissionMode {
+            if permissionMode == .bypassPermissions {
+                args.append("--allow-dangerously-skip-permissions")
+            }
+            args.append(contentsOf: ["--permission-mode", permissionMode.rawValue])
+        }
+
+        if let resumeId = normalizeCLISessionId(cliSessionId) {
+            args.append(contentsOf: ["--resume", resumeId])
+        } else if let sessionName, !sessionName.isEmpty {
+            args.append(contentsOf: ["--name", sessionName])
+        }
+
+        args.append(trimmedPrompt)
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: claudePath)
         process.currentDirectoryURL = URL(fileURLWithPath: cwd)
         process.environment = Foundation.ProcessInfo.processInfo.environment
 
-        // Set up stdin for the prompt
-        let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
-
-        process.standardInput = stdinPipe
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
         process.arguments = args
@@ -96,205 +220,128 @@ actor CLISessionManager {
         let cliProcess = CLIProcess(
             threadId: threadId,
             process: process,
-            stdinPipe: stdinPipe,
-            stdoutPipe: stdoutPipe
+            stdoutPipe: stdoutPipe,
+            stderrPipe: stderrPipe,
+            settingsFileURL: settingsFileURL
         )
         activeProcesses[threadId] = cliProcess
+        stdoutBuffers[threadId] = ""
+        stderrBuffers[threadId] = ""
 
-        // Write prompt to stdin and close (single-turn mode)
-        let promptData = prompt.data(using: .utf8) ?? Data()
-        stdinPipe.fileHandleForWriting.write(promptData)
-        stdinPipe.fileHandleForWriting.closeFile()
-
-        // Read stdout on background queue
-        let threadIdCopy = threadId
-        stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty else {
-                // EOF — process is ending
-                handle.readabilityHandler = nil
-                return
-            }
-
-            if let output = String(data: data, encoding: .utf8) {
-                let lines = output.components(separatedBy: .newlines)
-                for line in lines {
-                    guard let self else { return }
-                    let parser = CLIStreamParser()
-                    if let event = parser.parseLine(line) {
-                        Task {
-                            await self.triggerStreamEvent(threadId: threadIdCopy, event: event)
-                        }
-                    }
-                }
-            }
-        }
-
-        // Handle process termination
-        process.terminationHandler = { [weak self] proc in
-            logger.info("CLI process for thread \(threadIdCopy) terminated with code \(proc.terminationStatus)")
-            Task {
-                await self?.handleProcessTermination(threadId: threadIdCopy)
-            }
-        }
-
-        // Launch
-        do {
-            try process.run()
-            logger.info("Started CLI process for thread \(threadId), PID: \(process.processIdentifier)")
-        } catch {
-            logger.error("Failed to start CLI process: \(error)")
-            activeProcesses.removeValue(forKey: threadId)
-        }
-    }
-
-    /// Resume an existing Claude CLI session (for takeover from global monitor).
-    func resumeSession(threadId: String, cliSessionId: String, cwd: String) {
-        guard activeProcesses[threadId] == nil else {
-            logger.warning("Thread \(threadId) already has an active process")
-            return
-        }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: claudePath)
-        process.currentDirectoryURL = URL(fileURLWithPath: cwd)
-        process.environment = Foundation.ProcessInfo.processInfo.environment
-
-        let stdinPipe = Pipe()
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-
-        process.standardInput = stdinPipe
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        process.arguments = [
-            "-p",
-            "--output-format", "stream-json",
-            "--verbose",
-            "--resume", cliSessionId,
-            "--input-format", "stream-json",
-        ]
-
-        let cliProcess = CLIProcess(
-            threadId: threadId,
-            process: process,
-            stdinPipe: stdinPipe,
-            stdoutPipe: stdoutPipe
-        )
-        activeProcesses[threadId] = cliProcess
-
-        // Read stdout
         let threadIdCopy = threadId
         stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty else {
                 handle.readabilityHandler = nil
+                Task {
+                    await self?.flushStdoutBuffer(for: threadIdCopy)
+                }
                 return
             }
-            if let output = String(data: data, encoding: .utf8) {
-                let lines = output.components(separatedBy: .newlines)
-                for line in lines {
-                    guard let self else { return }
-                    let parser = CLIStreamParser()
-                    if let event = parser.parseLine(line) {
-                        Task {
-                            await self.triggerStreamEvent(threadId: threadIdCopy, event: event)
-                        }
-                    }
+
+            Task {
+                await self?.consumeStdoutChunk(data, for: threadIdCopy)
+            }
+        }
+
+        stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty else {
+                handle.readabilityHandler = nil
+                Task {
+                    await self?.flushStderrBuffer(for: threadIdCopy)
                 }
+                return
+            }
+
+            Task {
+                await self?.consumeStderrChunk(data, for: threadIdCopy)
             }
         }
 
         process.terminationHandler = { [weak self] proc in
-            logger.info("Resumed CLI process for thread \(threadIdCopy) terminated with code \(proc.terminationStatus)")
+            Self.logger.info("CLI process for thread \(threadIdCopy) terminated with code \(proc.terminationStatus)")
             Task {
-                await self?.handleProcessTermination(threadId: threadIdCopy)
+                await self?.handleProcessTermination(threadId: threadIdCopy, exitCode: proc.terminationStatus)
             }
         }
 
         do {
             try process.run()
-            logger.info("Resumed CLI session \(cliSessionId) for thread \(threadId), PID: \(process.processIdentifier)")
+            Self.logger.info("Started CLI turn for thread \(threadId), PID: \(process.processIdentifier)")
+            return true
         } catch {
-            logger.error("Failed to resume CLI process: \(error)")
+            Self.logger.error("Failed to start CLI process: \(error.localizedDescription, privacy: .public)")
             activeProcesses.removeValue(forKey: threadId)
+            stdoutBuffers.removeValue(forKey: threadId)
+            stderrBuffers.removeValue(forKey: threadId)
+            DetachedResumeSettingsSupport.removeSanitizedSettingsFile(at: settingsFileURL)
+            triggerStreamEvent(threadId: threadId, event: .error("Failed to start Claude CLI: \(error.localizedDescription)"))
+            return false
         }
     }
 
-    /// Send a follow-up message to an active session (stream-json input mode).
-    func sendMessage(threadId: String, message: String) {
-        guard let cliProcess = activeProcesses[threadId] else {
-            logger.warning("No active process for thread \(threadId)")
-            return
+    // MARK: - Output Handling
+
+    private func handleProcessTermination(threadId: String, exitCode: Int32) {
+        flushStdoutBuffer(for: threadId)
+        flushStderrBuffer(for: threadId)
+
+        if exitCode != 0,
+           let stderr = stderrBuffers[threadId]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !stderr.isEmpty {
+            triggerStreamEvent(threadId: threadId, event: .error(stderr))
         }
 
-        // stream-json input format: {"type": "user", "content": "..."}
-        let inputPayload: [String: Any] = [
-            "type": "user",
-            "content": message,
-        ]
-
-        guard let data = try? JSONSerialization.data(withJSONObject: inputPayload),
-              var jsonString = String(data: data, encoding: .utf8) else {
-            return
-        }
-        jsonString.append("\n")
-
-        if let writeData = jsonString.data(using: .utf8) {
-            cliProcess.stdinPipe.fileHandleForWriting.write(writeData)
-        }
-    }
-
-    /// Send SIGINT to gracefully interrupt Claude's processing.
-    func interruptSession(threadId: String) {
-        guard let cliProcess = activeProcesses[threadId],
-              cliProcess.process.isRunning else { return }
-
-        kill(cliProcess.process.processIdentifier, SIGINT)
-        logger.info("Sent SIGINT to thread \(threadId)")
-    }
-
-    /// Terminate a session's CLI process.
-    func stopSession(threadId: String) {
-        guard let cliProcess = activeProcesses[threadId] else { return }
-
-        if cliProcess.process.isRunning {
-            cliProcess.process.terminate() // SIGTERM
-
-            // Force kill after 2 seconds if still running
-            DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
-                if cliProcess.process.isRunning {
-                    kill(cliProcess.process.processIdentifier, SIGKILL)
-                    logger.warning("Force killed process for thread \(threadId)")
-                }
-            }
-        }
-
-        activeProcesses.removeValue(forKey: threadId)
-    }
-
-    /// Whether a thread has an active CLI process
-    func isActive(threadId: String) -> Bool {
-        activeProcesses[threadId]?.process.isRunning ?? false
-    }
-
-    /// Terminate all active processes (called on app exit)
-    func terminateAll() {
-        for (threadId, cliProcess) in activeProcesses {
-            if cliProcess.process.isRunning {
-                cliProcess.process.terminate()
-                logger.info("Terminated process for thread \(threadId) on app exit")
-            }
-        }
-        activeProcesses.removeAll()
-    }
-
-    // MARK: - Private
-
-    private func handleProcessTermination(threadId: String) {
-        activeProcesses.removeValue(forKey: threadId)
+        let cliProcess = activeProcesses.removeValue(forKey: threadId)
+        stdoutBuffers.removeValue(forKey: threadId)
+        stderrBuffers.removeValue(forKey: threadId)
+        DetachedResumeSettingsSupport.removeSanitizedSettingsFile(at: cliProcess?.settingsFileURL)
         triggerProcessEnded(threadId: threadId)
+    }
+
+    private func consumeStdoutChunk(_ data: Data, for threadId: String) {
+        guard let chunk = String(data: data, encoding: .utf8), !chunk.isEmpty else { return }
+
+        var buffer = stdoutBuffers[threadId, default: ""]
+        buffer.append(chunk)
+
+        let lines = buffer.components(separatedBy: .newlines)
+        stdoutBuffers[threadId] = lines.last ?? ""
+
+        let parser = CLIStreamParser()
+        for line in lines.dropLast() {
+            for event in parser.parseLine(line) {
+                triggerStreamEvent(threadId: threadId, event: event)
+            }
+        }
+    }
+
+    private func flushStdoutBuffer(for threadId: String) {
+        guard let remainder = stdoutBuffers[threadId] else { return }
+
+        let trimmed = remainder.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            stdoutBuffers[threadId] = ""
+            return
+        }
+
+        let parser = CLIStreamParser()
+        for event in parser.parseLine(trimmed) {
+            triggerStreamEvent(threadId: threadId, event: event)
+        }
+        stdoutBuffers[threadId] = ""
+    }
+
+    private func consumeStderrChunk(_ data: Data, for threadId: String) {
+        guard let chunk = String(data: data, encoding: .utf8), !chunk.isEmpty else { return }
+        stderrBuffers[threadId, default: ""].append(chunk)
+    }
+
+    private func flushStderrBuffer(for threadId: String) {
+        if stderrBuffers[threadId] == nil {
+            stderrBuffers[threadId] = ""
+        }
     }
 
     private func triggerStreamEvent(threadId: String, event: CLIStreamEvent) {
@@ -312,12 +359,10 @@ actor CLISessionManager {
     }
 }
 
-// MARK: - CLIProcess
-
-/// Holds references to a running CLI subprocess and its I/O pipes.
 private struct CLIProcess {
     let threadId: String
     let process: Process
-    let stdinPipe: Pipe
     let stdoutPipe: Pipe
+    let stderrPipe: Pipe
+    let settingsFileURL: URL?
 }

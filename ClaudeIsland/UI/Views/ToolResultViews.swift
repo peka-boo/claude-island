@@ -466,15 +466,13 @@ struct AskUserQuestionResultContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(result.questions.enumerated()), id: \.offset) { index, question in
+            ForEach(Array(result.questions.enumerated()), id: \.offset) { _, question in
                 VStack(alignment: .leading, spacing: 4) {
-                    // Question
                     Text(question.question)
                         .font(.system(size: 11))
                         .foregroundColor(.white.opacity(0.6))
 
-                    // Answer
-                    if let answer = result.answers["\(index)"] {
+                    if let answer = result.answers[question.question] {
                         HStack(spacing: 4) {
                             Image(systemName: "arrow.turn.down.right")
                                 .font(.system(size: 9))
@@ -482,6 +480,17 @@ struct AskUserQuestionResultContent: View {
                                 .font(.system(size: 11, weight: .medium))
                         }
                         .foregroundColor(.green.opacity(0.7))
+                    }
+
+                    if let notes = result.annotations[question.question]?.notes,
+                       notes != result.answers[question.question] {
+                        HStack(spacing: 4) {
+                            Image(systemName: "note.text")
+                                .font(.system(size: 9))
+                            Text(notes)
+                                .font(.system(size: 10))
+                        }
+                        .foregroundColor(.white.opacity(0.45))
                     }
                 }
             }

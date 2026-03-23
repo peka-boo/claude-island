@@ -39,6 +39,8 @@ enum AppSettings {
     private enum Keys {
         static let notificationSound = "notificationSound"
         static let notchEnabled = "notchEnabled"
+        static let desktopMessageEnabled = "desktopMessageEnabled"
+        static let desktopMessageCollapsed = "desktopMessageCollapsed"
         static let hookMonitorEnabled = "hookMonitorEnabled"
         static let serverPort = "serverPort"
     }
@@ -63,8 +65,106 @@ enum AppSettings {
 
     /// Whether the Notch overlay is enabled
     static var notchEnabled: Bool {
-        get { defaults.object(forKey: Keys.notchEnabled) as? Bool ?? true }
+        get {
+            if defaults.object(forKey: Keys.notchEnabled) == nil,
+               defaults.object(forKey: Keys.desktopMessageEnabled) == nil {
+                return ClaudeMessageDisplaySupport.defaultHookDisplayMode == .notch
+            }
+            return defaults.object(forKey: Keys.notchEnabled) as? Bool ?? false
+        }
         set { defaults.set(newValue, forKey: Keys.notchEnabled) }
+    }
+
+    static func setNotchEnabled(_ enabled: Bool) {
+        notchEnabled = enabled
+        NotificationCenter.default.post(
+            name: .notchToggled,
+            object: nil,
+            userInfo: ["enabled": enabled]
+        )
+    }
+
+    // MARK: - Desktop Message
+
+    /// Whether claude hook Popup mode is selected
+    static var desktopMessageEnabled: Bool {
+        get {
+            if defaults.object(forKey: Keys.desktopMessageEnabled) == nil,
+               defaults.object(forKey: Keys.notchEnabled) == nil {
+                return ClaudeMessageDisplaySupport.defaultHookDisplayMode == .popup
+            }
+            return defaults.object(forKey: Keys.desktopMessageEnabled) as? Bool ?? false
+        }
+        set { defaults.set(newValue, forKey: Keys.desktopMessageEnabled) }
+    }
+
+    /// Whether the floating desktop surface is currently collapsed
+    static var desktopMessageCollapsed: Bool {
+        get { defaults.object(forKey: Keys.desktopMessageCollapsed) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: Keys.desktopMessageCollapsed) }
+    }
+
+    static func setDesktopMessageEnabled(_ enabled: Bool) {
+        desktopMessageEnabled = enabled
+        if !enabled {
+            desktopMessageCollapsed = false
+        }
+
+        NotificationCenter.default.post(
+            name: .desktopMessageToggled,
+            object: nil,
+            userInfo: ["enabled": enabled]
+        )
+
+        if !enabled {
+            NotificationCenter.default.post(
+                name: .desktopMessageCollapsedToggled,
+                object: nil,
+                userInfo: ["collapsed": false]
+            )
+        }
+    }
+
+    static func setDesktopMessageCollapsed(_ collapsed: Bool) {
+        let resolvedCollapsed = desktopMessageEnabled ? collapsed : false
+        desktopMessageCollapsed = resolvedCollapsed
+        NotificationCenter.default.post(
+            name: .desktopMessageCollapsedToggled,
+            object: nil,
+            userInfo: ["collapsed": resolvedCollapsed]
+        )
+    }
+
+    static var claudeHookDisplayMode: ClaudeHookDisplayMode {
+        if defaults.object(forKey: Keys.notchEnabled) == nil,
+           defaults.object(forKey: Keys.desktopMessageEnabled) == nil {
+            return ClaudeMessageDisplaySupport.defaultHookDisplayMode
+        }
+
+        return notchEnabled ? .notch : .popup
+    }
+
+    static func setClaudeHookDisplayMode(_ mode: ClaudeHookDisplayMode) {
+        let state = ClaudeMessageDisplaySupport.settingsState(for: mode)
+        notchEnabled = state.notchEnabled
+        desktopMessageEnabled = state.popupEnabled
+        desktopMessageCollapsed = false
+
+        NotificationCenter.default.post(
+            name: .notchToggled,
+            object: nil,
+            userInfo: ["enabled": state.notchEnabled]
+        )
+        NotificationCenter.default.post(
+            name: .desktopMessageToggled,
+            object: nil,
+            userInfo: ["enabled": state.popupEnabled]
+        )
+        NotificationCenter.default.post(
+            name: .desktopMessageCollapsedToggled,
+            object: nil,
+            userInfo: ["collapsed": false]
+        )
     }
 
     // MARK: - Hook Monitor
@@ -73,6 +173,15 @@ enum AppSettings {
     static var hookMonitorEnabled: Bool {
         get { defaults.object(forKey: Keys.hookMonitorEnabled) as? Bool ?? true }
         set { defaults.set(newValue, forKey: Keys.hookMonitorEnabled) }
+    }
+
+    static func setHookMonitorEnabled(_ enabled: Bool) {
+        hookMonitorEnabled = enabled
+        NotificationCenter.default.post(
+            name: .hookMonitorToggled,
+            object: nil,
+            userInfo: ["enabled": enabled]
+        )
     }
 
     // MARK: - HTTP Server Port
@@ -88,4 +197,11 @@ enum AppSettings {
         }
         set { defaults.set(Int(newValue), forKey: Keys.serverPort) }
     }
+}
+
+extension Notification.Name {
+    static let notchToggled = Notification.Name("notchToggled")
+    static let desktopMessageToggled = Notification.Name("desktopMessageToggled")
+    static let desktopMessageCollapsedToggled = Notification.Name("desktopMessageCollapsedToggled")
+    static let hookMonitorToggled = Notification.Name("hookMonitorToggled")
 }

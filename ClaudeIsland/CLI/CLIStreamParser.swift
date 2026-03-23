@@ -63,43 +63,51 @@ struct CLIResultInfo: Sendable {
 /// }
 /// ```
 struct CLIStreamParser: Sendable {
+    nonisolated init() {}
 
     /// Parse a single line of stream-json output
-    func parseLine(_ line: String) -> CLIStreamEvent? {
+    nonisolated func parseLine(_ line: String) -> [CLIStreamEvent] {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard !trimmed.isEmpty else { return [] }
 
         guard let data = trimmed.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = json["type"] as? String else {
-            return nil
+            return []
         }
 
         switch type {
         case "assistant":
             return parseAssistantEvent(json)
 
+        case "user":
+            return parseUserEvent(json)
+
+        case "system":
+            return parseSystemEvent(json)
+
         case "result":
             return parseResultEvent(json)
 
         case "error":
             let message = json["message"] as? String ?? "Unknown error"
-            return .error(message)
+            return [.error(message)]
 
         default:
-            return .unknown(type: type, raw: trimmed)
+            return [.unknown(type: type, raw: trimmed)]
         }
     }
 
     // MARK: - Private Parsing
 
-    private func parseAssistantEvent(_ json: [String: Any]) -> CLIStreamEvent? {
+    private nonisolated func parseAssistantEvent(_ json: [String: Any]) -> [CLIStreamEvent] {
         guard let message = json["message"] as? [String: Any],
               let contentArray = message["content"] as? [[String: Any]] else {
-            return nil
+            return []
         }
 
         let sessionId = json["session_id"] as? String
+        var events: [CLIStreamEvent] = []
 
         // Process content blocks
         for block in contentArray {
@@ -108,12 +116,12 @@ struct CLIStreamParser: Sendable {
             switch blockType {
             case "thinking":
                 if let thinking = block["thinking"] as? String, !thinking.isEmpty {
-                    return .thinking(thinking)
+                    events.append(.thinking(thinking))
                 }
 
             case "text":
                 if let text = block["text"] as? String {
-                    return .text(text)
+                    events.append(.text(text))
                 }
 
             case "tool_use":
@@ -127,28 +135,71 @@ struct CLIStreamParser: Sendable {
                 } else {
                     inputString = "{}"
                 }
-                return .toolUse(id: toolId, name: toolName, input: inputString)
+                events.append(.toolUse(id: toolId, name: toolName, input: inputString))
 
             case "tool_result":
                 let toolId = block["tool_use_id"] as? String ?? ""
-                let content = block["content"] as? String ?? ""
-                return .toolResult(id: toolId, name: "", output: content)
+                let content = parseToolResultContent(block["content"])
+                events.append(.toolResult(id: toolId, name: "", output: content))
 
             default:
                 break
             }
         }
 
-        // If we got an assistant message with a session_id but no parsed content,
-        // it might be a session start signal
-        if let sid = sessionId, contentArray.isEmpty {
-            return .sessionStart(sessionId: sid)
+        if let sid = sessionId, events.isEmpty, contentArray.isEmpty {
+            events.append(.sessionStart(sessionId: sid))
         }
 
-        return nil
+        return events
     }
 
-    private func parseResultEvent(_ json: [String: Any]) -> CLIStreamEvent? {
+    private nonisolated func parseUserEvent(_ json: [String: Any]) -> [CLIStreamEvent] {
+        guard let message = json["message"] as? [String: Any],
+              let contentArray = message["content"] as? [[String: Any]] else {
+            return []
+        }
+
+        var events: [CLIStreamEvent] = []
+
+        for block in contentArray {
+            guard let blockType = block["type"] as? String else { continue }
+
+            switch blockType {
+            case "tool_result":
+                let toolId = block["tool_use_id"] as? String ?? ""
+                let content = parseToolResultContent(block["content"])
+                events.append(.toolResult(id: toolId, name: "", output: content))
+
+            case "text":
+                if let text = block["text"] as? String {
+                    events.append(.text(text))
+                }
+
+            default:
+                break
+            }
+        }
+
+        return events
+    }
+
+    private nonisolated func parseSystemEvent(_ json: [String: Any]) -> [CLIStreamEvent] {
+        let subtype = json["subtype"] as? String ?? ""
+
+        switch subtype {
+        case "init":
+            guard let sessionId = json["session_id"] as? String, !sessionId.isEmpty else {
+                return []
+            }
+            return [.sessionStart(sessionId: sessionId)]
+
+        default:
+            return []
+        }
+    }
+
+    private nonisolated func parseResultEvent(_ json: [String: Any]) -> [CLIStreamEvent] {
         let sessionId = json["session_id"] as? String ?? ""
         let result = json["result"] as? String ?? ""
         let isError = json["is_error"] as? Bool ?? false
@@ -164,15 +215,37 @@ struct CLIStreamParser: Sendable {
             tokensOut = usage["output_tokens"] as? Int ?? 0
         }
 
-        return .result(CLIResultInfo(
-            sessionId: sessionId,
-            result: result,
-            isError: isError,
-            costUsd: costUsd,
-            tokensIn: tokensIn,
-            tokensOut: tokensOut,
-            durationMs: durationMs,
-            stopReason: stopReason
-        ))
+        return [
+            .result(CLIResultInfo(
+                sessionId: sessionId,
+                result: result,
+                isError: isError,
+                costUsd: costUsd,
+                tokensIn: tokensIn,
+                tokensOut: tokensOut,
+                durationMs: durationMs,
+                stopReason: stopReason
+            ))
+        ]
+    }
+
+    private nonisolated func parseToolResultContent(_ rawContent: Any?) -> String {
+        if let text = rawContent as? String {
+            return text
+        }
+
+        if let blocks = rawContent as? [[String: Any]] {
+            let textParts = blocks.compactMap { block -> String? in
+                switch block["type"] as? String {
+                case "text":
+                    return block["text"] as? String
+                default:
+                    return nil
+                }
+            }
+            return textParts.joined(separator: "\n")
+        }
+
+        return ""
     }
 }

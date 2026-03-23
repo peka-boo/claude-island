@@ -27,6 +27,8 @@ struct HTTPHookEvent: Codable {
     let content: String?
     let toolName: String?
     let toolInput: String?
+    let toolUseId: String?
+    let notificationType: String?
     let terminalPid: Int?
     let shellPid: Int?
 
@@ -40,6 +42,8 @@ struct HTTPHookEvent: Codable {
         case content
         case toolName = "tool_name"
         case toolInput = "tool_input"
+        case toolUseId = "tool_use_id"
+        case notificationType = "notification_type"
         case terminalPid = "terminal_pid"
         case shellPid = "shell_pid"
         case permissionRequest = "permission_request"
@@ -137,11 +141,11 @@ final class LocalHTTPServer {
     }
 
     /// Respond to a held-open PermissionRequest connection
-    func respondToPermission(connection: NWConnection, approved: Bool) {
+    func respondToPermission(connection: NWConnection, approved: Bool, body: String? = nil) {
         if approved {
-            sendResponse(connection: connection, status: "200 OK", body: "OK")
+            sendResponse(connection: connection, status: "200 OK", body: body ?? "OK")
         } else {
-            sendResponse(connection: connection, status: "403 Forbidden", body: "Denied")
+            sendResponse(connection: connection, status: "403 Forbidden", body: body ?? "Denied")
         }
     }
 

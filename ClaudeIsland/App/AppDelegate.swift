@@ -75,6 +75,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             HookInstaller.installIfNeeded()
         }
 
+        Task { @MainActor in
+            ClaudeSessionMonitor.shared.startMonitoring()
+        }
+
+        _ = ClaudeHookPopupManager.shared
+
         // Notch — only create if enabled in settings
         if AppSettings.notchEnabled {
             windowManager = WindowManager()
@@ -108,6 +114,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             await ClaudeIslandApp.cliManager.terminateAll()
         }
 
+        Task { @MainActor in
+            ClaudeSessionMonitor.shared.stopMonitoring()
+        }
         Mixpanel.mainInstance().flush()
         updateCheckTimer?.invalidate()
         screenObserver = nil
@@ -123,9 +132,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] notification in
             let enabled = notification.userInfo?["enabled"] as? Bool ?? false
             if enabled {
-                self?.windowManager = WindowManager()
+                if self?.windowManager == nil {
+                    self?.windowManager = WindowManager()
+                }
                 _ = self?.windowManager?.setupNotchWindow()
             } else {
+                self?.windowManager?.tearDownNotchWindow()
                 self?.windowManager = nil
             }
         }
@@ -136,10 +148,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             queue: .main
         ) { notification in
             let enabled = notification.userInfo?["enabled"] as? Bool ?? false
-            if enabled {
-                HookInstaller.installIfNeeded()
-            } else {
-                // TODO: Uninstall hooks when implemented
+            Task { @MainActor in
+                if enabled {
+                    HookInstaller.installIfNeeded()
+                    ClaudeSessionMonitor.shared.startMonitoring()
+                } else {
+                    // TODO: Uninstall hooks when implemented
+                    ClaudeSessionMonitor.shared.stopMonitoring()
+                }
             }
         }
     }
