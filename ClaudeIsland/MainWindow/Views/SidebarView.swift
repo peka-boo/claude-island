@@ -254,6 +254,17 @@ struct SidebarView: View {
             )
         } else {
             VStack(alignment: .leading, spacing: MainWindowTheme.scaled(8)) {
+                // Show all sessions toggle
+                Toggle("Show all sessions", isOn: $viewModel.showAllSessions)
+                    .toggleStyle(.switch)
+                    .font(.system(size: MainWindowTheme.scaled(11), weight: .medium))
+                    .foregroundStyle(MainWindowTheme.textMuted)
+                    .padding(.horizontal, MainWindowTheme.scaled(14))
+                    .padding(.bottom, MainWindowTheme.scaled(2))
+                    .onChange(of: viewModel.showAllSessions) { _, _ in
+                        viewModel.applySearch()
+                    }
+                
                 if !AppSettings.hookMonitorEnabled {
                     Text("Live monitor is off. Showing saved Claude sessions from disk.")
                         .font(.system(size: MainWindowTheme.scaled(10), weight: .medium))

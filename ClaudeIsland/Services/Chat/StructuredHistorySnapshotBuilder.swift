@@ -6,6 +6,9 @@
 //
 
 import Foundation
+import os.log
+
+private let snapshotLogger = Logger(subsystem: "com.claudeisland", category: "SnapshotBuilder")
 
 struct StructuredHistorySnapshot: Sendable {
     let items: [ChatHistoryItem]
@@ -15,15 +18,29 @@ struct StructuredHistorySnapshot: Sendable {
 }
 
 enum StructuredHistorySnapshotBuilder {
+    /// Load history snapshot in two phases for better perceived performance:
+    /// 1. First returns recent messages quickly
+    /// 2. Then continues loading older messages in background
     static func load(sessionId: String, cwd: String) async -> StructuredHistorySnapshot {
-        let messages = await ConversationParser.shared.parseFullConversation(
+        snapshotLogger.info("[SNAPSHOT] ====== START load for sessionId: \(sessionId), cwd: \(cwd) ======")
+        let startTime = Date()
+
+        // Use parseIncremental which returns all data in one call
+        snapshotLogger.info("[SNAPSHOT] Step 1: Calling parseIncremental...")
+        let parseStartTime = Date()
+        let parseResult = await ConversationParser.shared.parseIncremental(
             sessionId: sessionId,
             cwd: cwd
         )
-        let completedTools = await ConversationParser.shared.completedToolIds(for: sessionId)
-        let toolResults = await ConversationParser.shared.toolResults(for: sessionId)
-        let structuredResults = await ConversationParser.shared.structuredResults(for: sessionId)
+        snapshotLogger.info("[SNAPSHOT] Step 1 DONE: parseIncremental took \(Date().timeIntervalSince(parseStartTime))s, messages: \(parseResult.allMessages.count)")
 
+        let messages = parseResult.allMessages
+        let completedTools = parseResult.completedToolIds
+        let toolResults = parseResult.toolResults
+        let structuredResults = parseResult.structuredResults
+
+        snapshotLogger.info("[SNAPSHOT] Step 2: Creating chat items...")
+        let createStartTime = Date()
         var items: [ChatHistoryItem] = []
         var existingIds = Set<String>()
         var seenToolIds = Set<String>()
@@ -46,15 +63,24 @@ enum StructuredHistorySnapshotBuilder {
                 items.append(item)
             }
         }
+        snapshotLogger.info("[SNAPSHOT] Step 2 DONE: Created \(items.count) items in \(Date().timeIntervalSince(createStartTime))s")
 
+        snapshotLogger.info("[SNAPSHOT] Step 3: Attaching subagent tools...")
+        let subagentStartTime = Date()
         var agentDescriptions: [String: String] = [:]
         await attachSubagentTools(
             to: &items,
             cwd: cwd,
             agentDescriptions: &agentDescriptions
         )
+        snapshotLogger.info("[SNAPSHOT] Step 3 DONE: Subagent tools attached in \(Date().timeIntervalSince(subagentStartTime))s")
 
+        snapshotLogger.info("[SNAPSHOT] Step 4: Sorting items...")
         items.sort { $0.timestamp < $1.timestamp }
+
+        let totalTime = Date().timeIntervalSince(startTime)
+        snapshotLogger.info("[SNAPSHOT] ====== END load: \(items.count) items, total time: \(totalTime)s ======")
+
         return StructuredHistorySnapshot(items: items, agentDescriptions: agentDescriptions)
     }
 
@@ -146,41 +172,97 @@ enum StructuredHistorySnapshotBuilder {
         cwd: String,
         agentDescriptions: inout [String: String]
     ) async {
+        let itemsCount = items.count
+        snapshotLogger.info("[SUBAGENT] Starting attachSubagentTools, items count: \(itemsCount)")
+
+        // Collect all agent IDs first
+        var agentIds: [(index: Int, agentId: String, description: String?, prompt: String?)] = []
+
         for index in items.indices {
-            guard case .toolCall(var tool) = items[index].type,
+            guard case .toolCall(let tool) = items[index].type,
                   case .task(let taskResult)? = tool.structuredResult,
                   !taskResult.agentId.isEmpty else {
                 continue
             }
 
-            if let description = tool.input["description"] ?? taskResult.prompt,
-               !description.isEmpty {
-                agentDescriptions[taskResult.agentId] = description
+            snapshotLogger.info("[SUBAGENT] Found agent at index \(index), agentId: \(taskResult.agentId)")
+            agentIds.append((
+                index: index,
+                agentId: taskResult.agentId,
+                description: tool.input["description"],
+                prompt: taskResult.prompt
+            ))
+        }
+
+        // Early return if no agents to process
+        guard !agentIds.isEmpty else {
+            snapshotLogger.info("[SUBAGENT] No agents found, returning early")
+            return
+        }
+
+        let agentCount = agentIds.count
+        snapshotLogger.info("[SUBAGENT] Loading \(agentCount) agents in parallel...")
+
+        // Load all subagent tools in parallel
+        let loadStartTime = Date()
+        let subagentToolResults = await withTaskGroup(of: (Int, [SubagentToolInfo]).self) { group in
+            for (index, agentId, _, _) in agentIds {
+                group.addTask {
+                    snapshotLogger.info("[SUBAGENT] Starting load for agent: \(agentId)")
+                    let taskStart = Date()
+                    let tools = await ConversationParser.shared.parseSubagentTools(
+                        agentId: agentId,
+                        cwd: cwd
+                    )
+                    let elapsed = Date().timeIntervalSince(taskStart)
+                    snapshotLogger.info("[SUBAGENT] Loaded \(tools.count) tools for agent \(agentId) in \(elapsed)s")
+                    return (index, tools)
+                }
             }
 
-            let subagentTools = await ConversationParser.shared.parseSubagentTools(
-                agentId: taskResult.agentId,
-                cwd: cwd
-            )
+            var results: [Int: [SubagentToolInfo]] = [:]
+            for await (index, tools) in group {
+                results[index] = tools
+            }
+            return results
+        }
+        let loadElapsed = Date().timeIntervalSince(loadStartTime)
+        snapshotLogger.info("[SUBAGENT] All agents loaded in \(loadElapsed)s")
 
-            guard !subagentTools.isEmpty else { continue }
+        // Apply results to items
+        for (index, agentId, description, prompt) in agentIds {
+            // Update agent description
+            if let desc = description ?? prompt, !desc.isEmpty {
+                agentDescriptions[agentId] = desc
+            }
 
+            // Apply subagent tools if available
+            guard let subagentTools = subagentToolResults[index], !subagentTools.isEmpty else {
+                continue
+            }
+
+            guard case .toolCall(var tool) = items[index].type else { continue }
+
+            let itemTimestamp = items[index].timestamp
             tool.subagentTools = subagentTools.map { info in
                 SubagentToolCall(
                     id: info.id,
                     name: info.name,
                     input: info.input,
                     status: info.isCompleted ? .success : .running,
-                    timestamp: parseTimestamp(info.timestamp) ?? items[index].timestamp
+                    timestamp: parseTimestamp(info.timestamp) ?? itemTimestamp
                 )
             }
 
+            let itemId = items[index].id
             items[index] = ChatHistoryItem(
-                id: items[index].id,
+                id: itemId,
                 type: .toolCall(tool),
-                timestamp: items[index].timestamp
+                timestamp: itemTimestamp
             )
         }
+
+        snapshotLogger.info("[SUBAGENT] Finished attachSubagentTools")
     }
 
     private static func parseTimestamp(_ timestamp: String?) -> Date? {

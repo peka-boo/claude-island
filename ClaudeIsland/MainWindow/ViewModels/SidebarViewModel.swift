@@ -65,9 +65,15 @@ final class SidebarViewModel {
     var mode: SidebarMode = .mySessions
     var searchText: String = "" {
         didSet {
-            applySearch()
+            searchDebounceTask?.cancel()
+            searchDebounceTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 300_000_000) // 300ms debounce
+                guard !Task.isCancelled else { return }
+                self?.applySearch()
+            }
         }
     }
+    var showAllSessions: Bool = false
     var selectedSessionIdentity: SidebarSessionIdentity?
     var selectedThreadId: String?
     var projects: [ProjectGroup] = []
@@ -89,6 +95,7 @@ final class SidebarViewModel {
     private var liveGlobalSessions: [HookSessionInfo] = []
     private var threadsById: [String: ThreadDTO] = [:]
     private var globalSessionsByNormalizedId: [String: HookSessionInfo] = [:]
+    private var searchDebounceTask: Task<Void, Never>?
 
     // MARK: - Init
 
@@ -321,7 +328,7 @@ final class SidebarViewModel {
         }
     }
 
-    private func applySearch() {
+    func applySearch() {
         if searchText.isEmpty {
             projects = allProjects
         } else {
@@ -343,18 +350,28 @@ final class SidebarViewModel {
             live: liveGlobalSessions,
             scanned: scannedGlobalSessions,
             searchText: ""
-        )
+        ).filter { session in
+            // Apply same filtering as globalSessions
+            showAllSessions || session.source == .live
+        }
         globalSessionsByNormalizedId = Dictionary(
             uniqueKeysWithValues: mergedGlobalSessions.map { session in
                 let normalizedSessionId = normalizeCLISessionId(session.sessionId) ?? session.sessionId
                 return (normalizedSessionId, session)
             }
         )
-        globalSessions = GlobalSessionSupport.mergedSessions(
+        let allMergedSessions = GlobalSessionSupport.mergedSessions(
             live: liveGlobalSessions,
             scanned: scannedGlobalSessions,
             searchText: searchText
         )
+        
+        // Filter to show only active sessions (live) unless showAllSessions is true
+        if showAllSessions {
+            globalSessions = allMergedSessions
+        } else {
+            globalSessions = allMergedSessions.filter { $0.source == .live }
+        }
         globalSessionGroups = GlobalSessionSupport.groupedSessions(globalSessions)
         reconcileSelectionState()
     }

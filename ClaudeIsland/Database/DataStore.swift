@@ -9,6 +9,8 @@
 import Foundation
 import SwiftData
 
+
+
 // MARK: - DataStore
 
 /// Provides the shared SwiftData ModelContainer for the app.
@@ -53,7 +55,7 @@ enum DataStore {
 
 /// A ModelActor for performing database operations off the main thread.
 @ModelActor
-actor BackgroundDataActor {
+actor BackgroundDataActor: DataStoring {
 
     // MARK: - Project Operations
 
@@ -577,6 +579,9 @@ struct MessageDTO: Identifiable, Equatable, Sendable {
     }
 }
 
+// 让MessageDTO遵循HasContent协议
+extension MessageDTO: HasContent {}
+
 // MARK: - Errors
 
 enum DataStoreError: LocalizedError {
@@ -589,4 +594,68 @@ enum DataStoreError: LocalizedError {
         case .threadNotFound(let id): return "Thread not found: \(id)"
         }
     }
+}
+
+// MARK: - DataStoring Protocol
+
+/// Protocol for data persistence operations
+protocol DataStoring: Sendable {
+    // Project Operations
+    func findOrCreateProject(path: String) throws -> String
+    func fetchAllProjects() throws -> [ProjectDTO]
+    func fetchProject(projectId: String) throws -> ProjectDTO?
+    
+    // Thread Operations
+    func createThread(
+        projectId: String,
+        title: String?,
+        source: ThreadSource,
+        cliSessionId: String?,
+        gitBranch: String?,
+        createdAt: Date?,
+        updatedAt: Date?
+    ) throws -> String
+    func fetchThreads(projectId: String) throws -> [ThreadDTO]
+    func fetchAllThreads() throws -> [ThreadDTO]
+    func fetchThread(threadId: String) throws -> ThreadDTO?
+    func fetchThreadId(cliSessionId: String) throws -> String?
+    func updateThreadStatus(threadId: String, status: ThreadStatus) throws
+    func updateThreadRuntime(
+        threadId: String,
+        status: ThreadStatus?,
+        cliSessionId: String?
+    ) throws
+    func updateThreadTitle(threadId: String, title: String) throws
+    
+    // Message Operations
+    func appendMessage(
+        threadId: String,
+        role: MessageRole,
+        content: String,
+        thinking: String?,
+        toolName: String?,
+        toolInput: String?,
+        toolResult: String?,
+        costUsd: Double?,
+        tokensIn: Int?,
+        tokensOut: Int?,
+        createdAt: Date?
+    ) throws -> String
+    func fetchMessages(threadId: String) throws -> [MessageDTO]
+    func fetchRecentMessages(threadId: String, limit: Int) throws -> [MessageDTO]
+    func fetchMessagesBefore(
+        threadId: String,
+        beforeMessageId: String,
+        beforeCreatedAt: Date,
+        limit: Int
+    ) throws -> [MessageDTO]
+    func clearThreadConversation(threadId: String) throws
+    
+    // Import Tracking
+    func isImported(cliSessionId: String) throws -> Bool
+    func recordImport(cliSessionId: String, threadId: String) throws
+    
+    // Delete
+    func deleteThread(threadId: String) throws
+    func deleteProject(projectId: String) throws
 }

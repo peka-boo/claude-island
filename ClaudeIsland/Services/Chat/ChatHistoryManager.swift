@@ -15,9 +15,11 @@ class ChatHistoryManager: ObservableObject {
 
     private var loadedSessions: Set<String> = []
     private var cancellables = Set<AnyCancellable>()
+    private let sessionStore: SessionStoring
 
-    private init() {
-        SessionStore.shared.sessionsPublisher
+    init(sessionStore: SessionStoring = SessionStore.shared) {
+        self.sessionStore = sessionStore
+        sessionStore.sessionsPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] sessions in
                 self?.updateFromSessions(sessions)
@@ -38,7 +40,7 @@ class ChatHistoryManager: ObservableObject {
     func loadFromFile(sessionId: String, cwd: String) async {
         guard !loadedSessions.contains(sessionId) else { return }
         loadedSessions.insert(sessionId)
-        await SessionStore.shared.process(.loadHistory(sessionId: sessionId, cwd: cwd))
+        await sessionStore.process(.loadHistory(sessionId: sessionId, cwd: cwd))
     }
 
     func syncFromFile(sessionId: String, cwd: String) async {
@@ -60,14 +62,14 @@ class ChatHistoryManager: ObservableObject {
             structuredResults: structuredResults
         )
 
-        await SessionStore.shared.process(.fileUpdated(payload))
+        await sessionStore.process(.fileUpdated(payload))
     }
 
     func clearHistory(for sessionId: String) {
         loadedSessions.remove(sessionId)
         histories.removeValue(forKey: sessionId)
         Task {
-            await SessionStore.shared.process(.sessionEnded(sessionId: sessionId))
+            await sessionStore.process(.sessionEnded(sessionId: sessionId))
         }
     }
 

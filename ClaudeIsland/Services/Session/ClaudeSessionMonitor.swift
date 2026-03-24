@@ -10,9 +10,46 @@ import AppKit
 import Combine
 import Foundation
 import Network
+import SwiftUI
+
+// MARK: - ClaudeSessionMonitoring Protocol
+
+/// Protocol for session monitoring and UI binding
+@MainActor
+protocol ClaudeSessionMonitoring: ObservableObject {
+    /// All active session instances
+    var instances: [SessionState] { get set }
+    
+    /// Sessions that need user attention
+    var pendingInstances: [SessionState] { get set }
+    
+    /// HTTP server for hook events
+    var httpServer: LocalHTTPServer { get }
+    
+    /// Start monitoring for session events
+    func startMonitoring()
+    
+    /// Stop monitoring for session events
+    func stopMonitoring()
+    
+    /// Approve a permission request for a session
+    func approvePermission(sessionId: String)
+    
+    /// Deny a permission request for a session
+    func denyPermission(sessionId: String, reason: String?)
+    
+    /// Submit an interactive response to a permission request
+    func submitInteractiveResponse(sessionId: String, message: String) async -> Bool
+    
+    /// Archive (remove) a session from the instances list
+    func archiveSession(sessionId: String)
+    
+    /// Request history load for a session
+    func loadHistory(sessionId: String, cwd: String)
+}
 
 @MainActor
-class ClaudeSessionMonitor: ObservableObject {
+class ClaudeSessionMonitor: ClaudeSessionMonitoring {
     static let shared = ClaudeSessionMonitor()
 
     @Published var instances: [SessionState] = []
@@ -24,10 +61,12 @@ class ClaudeSessionMonitor: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var isMonitoringStarted = false
     private var pendingHTTPPermissions: [String: NWConnection] = [:]
-    private var httpToolUseIdCache: [String: [String]] = [:]
+    private let httpToolUseIdCache = LRUCache<String, [String]>(capacity: 1000)
+    private let sessionStore: SessionStoring
 
-    init() {
-        SessionStore.shared.sessionsPublisher
+    init(sessionStore: SessionStoring = SessionStore.shared) {
+        self.sessionStore = sessionStore
+        sessionStore.sessionsPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] sessions in
                 self?.updateFromSessions(sessions)
@@ -57,9 +96,10 @@ class ClaudeSessionMonitor: ObservableObject {
 
             HookSocketServer.shared.start(
                 onEvent: { event in
-                    Task {
-                        await SessionStore.shared.process(.hookReceived(event))
-                        let session = await SessionStore.shared.session(for: event.sessionId)
+                    Task { [weak self] in
+                        guard let self else { return }
+                        await sessionStore.process(.hookReceived(event))
+                        let session = await sessionStore.session(for: event.sessionId)
                         await MainActor.run {
                             ClaudeHookPopupManager.shared.handleHookEvent(event, session: session)
                         }
@@ -88,9 +128,9 @@ class ClaudeSessionMonitor: ObservableObject {
                         HookSocketServer.shared.cancelPendingPermission(toolUseId: toolUseId)
                     }
                 },
-                onPermissionFailure: { sessionId, toolUseId in
+                onPermissionFailure: { [weak self] sessionId, toolUseId in
                     Task {
-                        await SessionStore.shared.process(
+                        await self?.sessionStore.process(
                             .permissionSocketFailed(sessionId: sessionId, toolUseId: toolUseId)
                         )
                     }
@@ -121,7 +161,7 @@ class ClaudeSessionMonitor: ObservableObject {
 
     func approvePermission(sessionId: String) {
         Task {
-            guard let session = await SessionStore.shared.session(for: sessionId),
+            guard let session = await sessionStore.session(for: sessionId),
                   let permission = session.activePermission else {
                 return
             }
@@ -130,7 +170,7 @@ class ClaudeSessionMonitor: ObservableObject {
                 respondToPendingPermission(sessionId: sessionId, toolUseId: permission.toolUseId, approved: true, reason: nil)
             }
 
-            await SessionStore.shared.process(
+            await sessionStore.process(
                 .permissionApproved(sessionId: sessionId, toolUseId: permission.toolUseId)
             )
         }
@@ -138,7 +178,7 @@ class ClaudeSessionMonitor: ObservableObject {
 
     func denyPermission(sessionId: String, reason: String?) {
         Task {
-            guard let session = await SessionStore.shared.session(for: sessionId),
+            guard let session = await sessionStore.session(for: sessionId),
                   let permission = session.activePermission else {
                 return
             }
@@ -147,7 +187,7 @@ class ClaudeSessionMonitor: ObservableObject {
                 respondToPendingPermission(sessionId: sessionId, toolUseId: permission.toolUseId, approved: false, reason: reason)
             }
 
-            await SessionStore.shared.process(
+            await sessionStore.process(
                 .permissionDenied(sessionId: sessionId, toolUseId: permission.toolUseId, reason: reason)
             )
         }
@@ -156,7 +196,7 @@ class ClaudeSessionMonitor: ObservableObject {
     func submitInteractiveResponse(sessionId: String, message: String) async -> Bool {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
-              let session = await SessionStore.shared.session(for: sessionId),
+              let session = await sessionStore.session(for: sessionId),
               let permission = session.activePermission else {
             return false
         }
@@ -171,7 +211,7 @@ class ClaudeSessionMonitor: ObservableObject {
 
         guard responded else { return false }
 
-        await SessionStore.shared.process(
+        await sessionStore.process(
             .permissionApproved(sessionId: sessionId, toolUseId: permission.toolUseId)
         )
         return true
@@ -180,7 +220,7 @@ class ClaudeSessionMonitor: ObservableObject {
     /// Archive (remove) a session from the instances list
     func archiveSession(sessionId: String) {
         Task {
-            await SessionStore.shared.process(.sessionEnded(sessionId: sessionId))
+            await sessionStore.process(.sessionEnded(sessionId: sessionId))
         }
     }
 
@@ -199,8 +239,8 @@ class ClaudeSessionMonitor: ObservableObject {
             cleanupHTTPToolUseCache(sessionId: hookEvent.sessionId)
         }
 
-        await SessionStore.shared.process(.hookReceived(hookEvent))
-        let session = await SessionStore.shared.session(for: hookEvent.sessionId)
+        await sessionStore.process(.hookReceived(hookEvent))
+        let session = await sessionStore.session(for: hookEvent.sessionId)
         ClaudeHookPopupManager.shared.handleHookEvent(hookEvent, session: session)
     }
 
@@ -369,7 +409,9 @@ class ClaudeSessionMonitor: ObservableObject {
         toolUseId: String
     ) {
         let key = cacheKey(sessionId: sessionId, toolName: toolName, toolInput: toolInput)
-        httpToolUseIdCache[key, default: []].append(toolUseId)
+        var queue = httpToolUseIdCache.get(key) ?? []
+        queue.append(toolUseId)
+        httpToolUseIdCache.set(key, value: queue)
     }
 
     private func popCachedHTTPToolUseId(
@@ -378,24 +420,24 @@ class ClaudeSessionMonitor: ObservableObject {
         toolInput: [String: AnyCodable]?
     ) -> String? {
         let key = cacheKey(sessionId: sessionId, toolName: toolName, toolInput: toolInput)
-        guard var queue = httpToolUseIdCache[key], !queue.isEmpty else {
+        guard var queue = httpToolUseIdCache.get(key), !queue.isEmpty else {
             return nil
         }
 
         let toolUseId = queue.removeFirst()
         if queue.isEmpty {
-            httpToolUseIdCache.removeValue(forKey: key)
+            httpToolUseIdCache.remove(key)
         } else {
-            httpToolUseIdCache[key] = queue
+            httpToolUseIdCache.set(key, value: queue)
         }
         return toolUseId
     }
 
     private func cleanupHTTPToolUseCache(sessionId: String) {
         let prefix = "\(sessionId):"
-        let keys = httpToolUseIdCache.keys.filter { $0.hasPrefix(prefix) }
+        let keys = httpToolUseIdCache.allKeys().filter { $0.hasPrefix(prefix) }
         for key in keys {
-            httpToolUseIdCache.removeValue(forKey: key)
+            httpToolUseIdCache.remove(key)
         }
     }
 
@@ -425,8 +467,12 @@ class ClaudeSessionMonitor: ObservableObject {
     /// Request history load for a session
     func loadHistory(sessionId: String, cwd: String) {
         Task {
-            await SessionStore.shared.process(.loadHistory(sessionId: sessionId, cwd: cwd))
+            await sessionStore.process(.loadHistory(sessionId: sessionId, cwd: cwd))
         }
+    }
+    
+    deinit {
+        cancellables.removeAll()
     }
 }
 
@@ -434,8 +480,8 @@ class ClaudeSessionMonitor: ObservableObject {
 
 extension ClaudeSessionMonitor: JSONLInterruptWatcherDelegate {
     nonisolated func didDetectInterrupt(sessionId: String) {
-        Task {
-            await SessionStore.shared.process(.interruptDetected(sessionId: sessionId))
+        Task { [weak self] in
+            await self?.sessionStore.process(.interruptDetected(sessionId: sessionId))
         }
 
         Task { @MainActor in

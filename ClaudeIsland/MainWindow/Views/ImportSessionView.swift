@@ -378,7 +378,7 @@ struct ImportSessionView: View {
             guard let session = sessions.first(where: { $0.id == sessionId }) else { continue }
 
             do {
-                let history = try ImportedSessionHistoryParser.parse(
+                let history = try await ImportedSessionHistoryParser.parseAsync(
                     jsonlURL: URL(fileURLWithPath: session.jsonlPath)
                 )
                 let projectId = try await actor.findOrCreateProject(path: session.projectPath)

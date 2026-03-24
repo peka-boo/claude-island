@@ -35,7 +35,15 @@ enum CLISessionScanner {
     }()
 
     /// Scan all Claude CLI projects and return importable sessions.
+    /// Runs file I/O operations on a background thread to avoid blocking the main thread.
     static func scan() async -> [ImportableSession] {
+        // Run the entire scanning operation on a background thread
+        await Task.detached(priority: .background) {
+            Self.performScan()
+        }.value
+    }
+
+    private static nonisolated func performScan() -> [ImportableSession] {
         let fm = FileManager.default
 
         guard let projectDirs = try? fm.contentsOfDirectory(

@@ -11,6 +11,13 @@ actor MonitoredSessionMessageSender {
     static let shared = MonitoredSessionMessageSender()
 
     private var syncTasks: [String: Task<Void, Never>] = [:]
+    private let cliManager: CLIManaging
+    private let sessionStore: SessionStoring
+
+    init(cliManager: CLIManaging = CLISessionManager.shared, sessionStore: SessionStoring = SessionStore.shared) {
+        self.cliManager = cliManager
+        self.sessionStore = sessionStore
+    }
 
     func sendMessage(_ message: String, to session: SessionState) async -> Bool {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -29,10 +36,11 @@ actor MonitoredSessionMessageSender {
             return await TmuxController.shared.sendMessage(trimmed, to: target)
 
         case .detachedResume(let sessionId):
-            let didSend = await CLISessionManager.shared.sendDetachedTurn(
+            let didSend = await cliManager.sendDetachedTurn(
                 sessionId: sessionId,
                 cwd: session.cwd,
-                prompt: trimmed
+                prompt: trimmed,
+                permissionMode: .default
             )
             guard didSend,
                   let threadId = SessionMessageTransportSupport.detachedThreadId(for: sessionId) else {
@@ -63,16 +71,16 @@ actor MonitoredSessionMessageSender {
                 Task { await self?.clearSyncTask(for: threadId) }
             }
 
-            await SessionStore.shared.process(.loadHistory(sessionId: sessionId, cwd: cwd))
+            await sessionStore.process(.loadHistory(sessionId: sessionId, cwd: cwd))
 
-            while await CLISessionManager.shared.isActive(threadId: threadId) {
+            while await cliManager.isActive(threadId: threadId) {
                 try? await Task.sleep(nanoseconds: 700_000_000)
                 guard !Task.isCancelled else { return }
-                await SessionStore.shared.process(.loadHistory(sessionId: sessionId, cwd: cwd))
+                await sessionStore.process(.loadHistory(sessionId: sessionId, cwd: cwd))
             }
 
             guard !Task.isCancelled else { return }
-            await SessionStore.shared.process(.loadHistory(sessionId: sessionId, cwd: cwd))
+            await sessionStore.process(.loadHistory(sessionId: sessionId, cwd: cwd))
         }
     }
 

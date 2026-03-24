@@ -13,9 +13,9 @@ struct MainContentView: View {
     @State private var sidebarVM = SidebarViewModel()
     @State private var chatVM: ChatViewModel
 
-    let cliManager: CLISessionManager
+    let cliManager: CLIManaging
 
-    init(cliManager: CLISessionManager) {
+    init(cliManager: CLIManaging) {
         self.cliManager = cliManager
         self._chatVM = State(initialValue: ChatViewModel(cliManager: cliManager))
     }

@@ -13,7 +13,7 @@ struct ClaudeIslandApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     /// Shared CLI session manager for subprocess lifecycle
-    static let cliManager = CLISessionManager.shared
+    static let cliManager: CLIManaging = CLISessionManager.shared
 
     var body: some Scene {
         // Main Window — opens by default on launch

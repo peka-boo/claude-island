@@ -402,4 +402,15 @@ enum ImportedSessionHistoryParser {
         }
         return string
     }
+    
+    // MARK: - Async parsing
+    
+    /// Parse JSONL file asynchronously, moving file I/O and parsing to background thread
+    static func parseAsync(jsonlURL: URL) async throws -> ImportedSessionHistory {
+        // Perform file reading and parsing in background
+        let history = try await Task.detached(priority: .background) {
+            try self.parse(jsonlURL: jsonlURL)
+        }.value
+        return history
+    }
 }

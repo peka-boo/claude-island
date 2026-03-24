@@ -203,11 +203,15 @@ class AgentFileWatcherManager {
 class AgentFileWatcherBridge: AgentFileWatcherDelegate {
     static let shared = AgentFileWatcherBridge()
 
-    private init() {}
+    private let sessionStore: SessionStoring
+
+    init(sessionStore: SessionStoring = SessionStore.shared) {
+        self.sessionStore = sessionStore
+    }
 
     func didUpdateAgentTools(sessionId: String, taskToolId: String, tools: [SubagentToolInfo]) {
         Task {
-            await SessionStore.shared.process(
+            await sessionStore.process(
                 .agentFileUpdated(sessionId: sessionId, taskToolId: taskToolId, tools: tools)
             )
         }

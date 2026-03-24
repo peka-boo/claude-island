@@ -15,7 +15,48 @@ enum CLIPermissionMode: String, Sendable {
     case bypassPermissions = "bypassPermissions"
 }
 
-actor CLISessionManager {
+// MARK: - CLIManaging Protocol
+
+/// Protocol for managing CLI session lifecycle
+protocol CLIManaging: Sendable {
+    /// Set callback for stream events
+    func setOnStreamEvent(_ closure: @escaping (String, CLIStreamEvent) -> Void)
+    
+    /// Set callback for process ended events
+    func setOnProcessEnded(_ closure: @escaping (String) -> Void)
+    
+    /// Run a turn with the CLI
+    func runTurn(
+        threadId: String,
+        cwd: String,
+        prompt: String,
+        cliSessionId: String?,
+        sessionName: String?,
+        permissionMode: CLIPermissionMode?
+    )
+    
+    /// Send a detached turn for a session
+    func sendDetachedTurn(
+        sessionId: String,
+        cwd: String,
+        prompt: String,
+        permissionMode: CLIPermissionMode?
+    ) -> Bool
+    
+    /// Interrupt a session by thread ID
+    func interruptSession(threadId: String)
+    
+    /// Stop a session by thread ID
+    func stopSession(threadId: String)
+    
+    /// Check if a session is active
+    func isActive(threadId: String) -> Bool
+    
+    /// Terminate all active sessions
+    func terminateAll()
+}
+
+actor CLISessionManager: CLIManaging {
     nonisolated private static let logger = Logger(subsystem: "com.claudeisland", category: "CLI")
     static let shared = CLISessionManager()
 

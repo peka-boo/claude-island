@@ -189,51 +189,56 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func fetchAndRegisterClaudeVersion() {
-        let claudeProjectsDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude/projects")
+        // Run file operations in background to avoid blocking main thread
+        Task.detached(priority: .background) {
+            let claudeProjectsDir = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".claude/projects")
 
-        guard let projectDirs = try? FileManager.default.contentsOfDirectory(
-            at: claudeProjectsDir,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: .skipsHiddenFiles
-        ) else { return }
-
-        var latestFile: URL?
-        var latestDate: Date?
-
-        for projectDir in projectDirs {
-            guard let files = try? FileManager.default.contentsOfDirectory(
-                at: projectDir,
+            guard let projectDirs = try? FileManager.default.contentsOfDirectory(
+                at: claudeProjectsDir,
                 includingPropertiesForKeys: [.contentModificationDateKey],
                 options: .skipsHiddenFiles
-            ) else { continue }
+            ) else { return }
 
-            for file in files where file.pathExtension == "jsonl" && !file.lastPathComponent.hasPrefix("agent-") {
-                if let attrs = try? file.resourceValues(forKeys: [.contentModificationDateKey]),
-                   let modDate = attrs.contentModificationDate {
-                    if latestDate == nil || modDate > latestDate! {
-                        latestDate = modDate
-                        latestFile = file
+            var latestFile: URL?
+            var latestDate: Date?
+
+            for projectDir in projectDirs {
+                guard let files = try? FileManager.default.contentsOfDirectory(
+                    at: projectDir,
+                    includingPropertiesForKeys: [.contentModificationDateKey],
+                    options: .skipsHiddenFiles
+                ) else { continue }
+
+                for file in files where file.pathExtension == "jsonl" && !file.lastPathComponent.hasPrefix("agent-") {
+                    if let attrs = try? file.resourceValues(forKeys: [.contentModificationDateKey]),
+                       let modDate = attrs.contentModificationDate {
+                        if latestDate == nil || modDate > latestDate! {
+                            latestDate = modDate
+                            latestFile = file
+                        }
                     }
                 }
             }
-        }
 
-        guard let jsonlFile = latestFile,
-              let handle = FileHandle(forReadingAtPath: jsonlFile.path) else { return }
-        defer { try? handle.close() }
+            guard let jsonlFile = latestFile,
+                  let handle = FileHandle(forReadingAtPath: jsonlFile.path) else { return }
+            defer { try? handle.close() }
 
-        let data = handle.readData(ofLength: 8192)
-        guard let content = String(data: data, encoding: .utf8) else { return }
+            let data = handle.readData(ofLength: 8192)
+            guard let content = String(data: data, encoding: .utf8) else { return }
 
-        for line in content.components(separatedBy: .newlines) where !line.isEmpty {
-            guard let lineData = line.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
-                  let version = json["version"] as? String else { continue }
+            for line in content.components(separatedBy: .newlines) where !line.isEmpty {
+                guard let lineData = line.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                      let version = json["version"] as? String else { continue }
 
-            Mixpanel.mainInstance().registerSuperProperties(["claude_code_version": version])
-            Mixpanel.mainInstance().people.set(properties: ["claude_code_version": version])
-            return
+                await MainActor.run {
+                    Mixpanel.mainInstance().registerSuperProperties(["claude_code_version": version])
+                    Mixpanel.mainInstance().people.set(properties: ["claude_code_version": version])
+                }
+                return
+            }
         }
     }
 

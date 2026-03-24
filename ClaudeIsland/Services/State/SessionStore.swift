@@ -11,9 +11,29 @@ import Foundation
 import Mixpanel
 import os.log
 
+// MARK: - SessionStoring Protocol
+
+/// Protocol for session state management
+protocol SessionStoring: Sendable {
+    /// Publisher for session state changes
+    var sessionsPublisher: AnyPublisher<[SessionState], Never> { get }
+    
+    /// Process any session event
+    func process(_ event: SessionEvent) async
+    
+    /// Get a specific session
+    func session(for sessionId: String) async -> SessionState?
+    
+    /// Check if there's an active permission for a session
+    func hasActivePermission(sessionId: String) async -> Bool
+    
+    /// Get all current sessions
+    func allSessions() async -> [SessionState]
+}
+
 /// Central state manager for all Claude sessions
 /// Uses Swift actor for thread-safe state mutations
-actor SessionStore {
+actor SessionStore: SessionStoring {
     static let shared = SessionStore()
 
     /// Logger for session store (nonisolated static for cross-context access)
@@ -970,12 +990,12 @@ actor SessionStore {
     // MARK: - Queries
 
     /// Get a specific session
-    func session(for sessionId: String) -> SessionState? {
+    func session(for sessionId: String) async -> SessionState? {
         sessions[sessionId]
     }
 
     /// Check if there's an active permission for a session
-    func hasActivePermission(sessionId: String) -> Bool {
+    func hasActivePermission(sessionId: String) async -> Bool {
         guard let session = sessions[sessionId] else { return false }
         if case .waitingForApproval = session.phase {
             return true
@@ -984,7 +1004,7 @@ actor SessionStore {
     }
 
     /// Get all current sessions
-    func allSessions() -> [SessionState] {
+    func allSessions() async -> [SessionState] {
         Array(sessions.values)
     }
 }

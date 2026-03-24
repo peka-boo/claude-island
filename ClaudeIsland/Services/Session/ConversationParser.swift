@@ -24,9 +24,10 @@ actor ConversationParser {
     /// Logger for conversation parser (nonisolated static for cross-context access)
     nonisolated static let logger = Logger(subsystem: "com.claudeisland", category: "Parser")
 
-    /// Cache of parsed conversation info, keyed by session file path
-    private var cache: [String: CachedInfo] = [:]
+    /// LRU cache of parsed conversation info, keyed by session file path
+    private let cache = LRUCache<String, CachedInfo>(capacity: 100)
 
+    /// Simple dictionary for incremental parsing state (no locking needed, actor-isolated)
     private var incrementalState: [String: IncrementalParseState] = [:]
 
     private struct CachedInfo {
@@ -78,7 +79,7 @@ actor ConversationParser {
 
     /// Parse a JSONL file to extract conversation info
     /// Uses caching based on file modification time
-    func parse(sessionId: String, cwd: String) -> ConversationInfo {
+    func parse(sessionId: String, cwd: String) async -> ConversationInfo {
         let projectDir = cwd.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".", with: "-")
         let sessionFile = Self.claudeProjectsRootPath + "/" + projectDir + "/" + sessionId + ".jsonl"
 
@@ -89,23 +90,26 @@ actor ConversationParser {
             return ConversationInfo(summary: nil, lastMessage: nil, lastMessageRole: nil, lastToolName: nil, firstUserMessage: nil, lastUserMessageDate: nil)
         }
 
-        if let cached = cache[sessionFile], cached.modificationDate == modDate {
+        if let cached = cache.get(sessionFile), cached.modificationDate == modDate {
             return cached.info
         }
 
-        guard let data = fileManager.contents(atPath: sessionFile),
-              let content = String(data: data, encoding: .utf8) else {
-            return ConversationInfo(summary: nil, lastMessage: nil, lastMessageRole: nil, lastToolName: nil, firstUserMessage: nil, lastUserMessageDate: nil)
-        }
+        // Perform file reading and parsing in background
+        let info = await Task.detached(priority: .background) {
+            guard let data = fileManager.contents(atPath: sessionFile),
+                  let content = String(data: data, encoding: .utf8) else {
+                return ConversationInfo(summary: nil, lastMessage: nil, lastMessageRole: nil, lastToolName: nil, firstUserMessage: nil, lastUserMessageDate: nil)
+            }
+            return self.parseContent(content)
+        }.value
 
-        let info = parseContent(content)
-        cache[sessionFile] = CachedInfo(modificationDate: modDate, info: info)
+        cache.set(sessionFile, value: CachedInfo(modificationDate: modDate, info: info))
 
         return info
     }
 
-    /// Parse JSONL content
-    private func parseContent(_ content: String) -> ConversationInfo {
+    /// Parse JSONL content (nonisolated for background execution)
+    private nonisolated func parseContent(_ content: String) -> ConversationInfo {
         let lines = content.components(separatedBy: "\n").filter { !$0.isEmpty }
 
         var summary: String?
@@ -269,18 +273,26 @@ actor ConversationParser {
     // MARK: - Full Conversation Parsing
 
     /// Parse full conversation history for chat view (returns ALL messages - use sparingly)
-    func parseFullConversation(sessionId: String, cwd: String) -> [ChatMessage] {
+    func parseFullConversation(sessionId: String, cwd: String) async -> [ChatMessage] {
         let sessionFile = Self.sessionFilePath(sessionId: sessionId, cwd: cwd)
 
         guard FileManager.default.fileExists(atPath: sessionFile) else {
             return []
         }
 
-        var state = incrementalState[sessionId] ?? IncrementalParseState()
-        _ = parseNewLines(filePath: sessionFile, state: &state)
-        incrementalState[sessionId] = state
+        // Get current state in actor context
+        let currentState = incrementalState[sessionId] ?? IncrementalParseState()
 
-        return state.messages
+        // Perform file reading and parsing in background
+        let result = await Task.detached(priority: .background) {
+            var state = currentState
+            _ = self.parseNewLines(filePath: sessionFile, state: &state)
+            return (state, state.messages)
+        }.value
+
+        // Update actor state
+        incrementalState[sessionId] = result.0
+        return result.1
     }
 
     /// Result of incremental parsing
@@ -294,10 +306,14 @@ actor ConversationParser {
     }
 
     /// Parse only NEW messages since last call (efficient incremental updates)
-    func parseIncremental(sessionId: String, cwd: String) -> IncrementalParseResult {
+    func parseIncremental(sessionId: String, cwd: String) async -> IncrementalParseResult {
+        Self.logger.info("[PARSE] parseIncremental called for \(sessionId)")
+
         let sessionFile = Self.sessionFilePath(sessionId: sessionId, cwd: cwd)
+        Self.logger.info("[PARSE] Session file path: \(sessionFile)")
 
         guard FileManager.default.fileExists(atPath: sessionFile) else {
+            Self.logger.info("[PARSE] File does not exist, returning empty")
             return IncrementalParseResult(
                 newMessages: [],
                 allMessages: [],
@@ -308,13 +324,24 @@ actor ConversationParser {
             )
         }
 
+        Self.logger.info("[PARSE] File exists, getting state...")
+        // Get current state
         var state = incrementalState[sessionId] ?? IncrementalParseState()
+        Self.logger.info("[PARSE] State loaded, lastOffset: \(state.lastFileOffset), messages: \(state.messages.count)")
+
+        // Parse directly without Task.detached to avoid actor isolation issues
+        Self.logger.info("[PARSE] Starting parseNewLines...")
+        let parseStart = Date()
         let newMessages = parseNewLines(filePath: sessionFile, state: &state)
+        Self.logger.info("[PARSE] parseNewLines completed in \(Date().timeIntervalSince(parseStart))s, newMessages: \(newMessages.count)")
+
+        // Update actor state
         let clearDetected = state.clearPending
         if clearDetected {
             state.clearPending = false
         }
         incrementalState[sessionId] = state
+        Self.logger.info("[PARSE] State updated, returning result")
 
         return IncrementalParseResult(
             newMessages: newMessages,
@@ -327,7 +354,7 @@ actor ConversationParser {
     }
 
     /// Parse only new lines since last read (incremental)
-    private func parseNewLines(filePath: String, state: inout IncrementalParseState) -> [ChatMessage] {
+    private nonisolated func parseNewLines(filePath: String, state: inout IncrementalParseState) -> [ChatMessage] {
         guard let fileHandle = FileHandle(forReadingAtPath: filePath) else {
             return []
         }
@@ -470,7 +497,7 @@ actor ConversationParser {
         return Self.claudeProjectsRootPath + "/" + projectDir + "/" + sessionId + ".jsonl"
     }
 
-    private func parseMessageLine(_ json: [String: Any], seenToolIds: inout Set<String>, toolIdToName: inout [String: String]) -> ChatMessage? {
+    private nonisolated func parseMessageLine(_ json: [String: Any], seenToolIds: inout Set<String>, toolIdToName: inout [String: String]) -> ChatMessage? {
         guard let type = json["type"] as? String,
               let uuid = json["uuid"] as? String else {
             return nil
@@ -556,7 +583,7 @@ actor ConversationParser {
         )
     }
 
-    private func parseToolUse(_ block: [String: Any]) -> ToolUseBlock? {
+    private nonisolated func parseToolUse(_ block: [String: Any]) -> ToolUseBlock? {
         guard let id = block["id"] as? String,
               let name = block["name"] as? String else {
             return nil
@@ -895,80 +922,85 @@ actor ConversationParser {
     // MARK: - Subagent Tools Parsing
 
     /// Parse subagent tools from an agent JSONL file
-    func parseSubagentTools(agentId: String, cwd: String) -> [SubagentToolInfo] {
+    func parseSubagentTools(agentId: String, cwd: String) async -> [SubagentToolInfo] {
         guard !agentId.isEmpty else { return [] }
 
         let projectDir = cwd.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".", with: "-")
         let agentFile = Self.claudeProjectsRootPath + "/" + projectDir + "/agent-" + agentId + ".jsonl"
 
-        guard FileManager.default.fileExists(atPath: agentFile),
-              let content = try? String(contentsOfFile: agentFile, encoding: .utf8) else {
-            return []
-        }
-
-        var tools: [SubagentToolInfo] = []
-        var seenToolIds: Set<String> = []
-        var completedToolIds: Set<String> = []
-
-        for line in content.components(separatedBy: "\n") where !line.isEmpty {
-            if line.contains("\"tool_result\""),
-               let lineData = line.data(using: .utf8),
-               let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
-               let messageDict = json["message"] as? [String: Any],
-               let contentArray = messageDict["content"] as? [[String: Any]] {
-                for block in contentArray {
-                    if block["type"] as? String == "tool_result",
-                       let toolUseId = block["tool_use_id"] as? String {
-                        completedToolIds.insert(toolUseId)
-                    }
-                }
-            }
-        }
-
-        for line in content.components(separatedBy: "\n") where !line.isEmpty {
-            guard line.contains("\"tool_use\""),
-                  let lineData = line.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
-                  let messageDict = json["message"] as? [String: Any],
-                  let contentArray = messageDict["content"] as? [[String: Any]] else {
-                continue
+        // Perform file reading and parsing in background
+        let tools = await Task.detached(priority: .background) {
+            guard FileManager.default.fileExists(atPath: agentFile),
+                  let content = try? String(contentsOfFile: agentFile, encoding: .utf8) else {
+                return [] as [SubagentToolInfo]
             }
 
-            for block in contentArray {
-                guard block["type"] as? String == "tool_use",
-                      let toolId = block["id"] as? String,
-                      let toolName = block["name"] as? String,
-                      !seenToolIds.contains(toolId) else {
-                    continue
-                }
+            var tools: [SubagentToolInfo] = []
+            var seenToolIds: Set<String> = []
+            var completedToolIds: Set<String> = []
 
-                seenToolIds.insert(toolId)
-
-                var input: [String: String] = [:]
-                if let inputDict = block["input"] as? [String: Any] {
-                    for (key, value) in inputDict {
-                        if let strValue = value as? String {
-                            input[key] = strValue
-                        } else if let intValue = value as? Int {
-                            input[key] = String(intValue)
-                        } else if let boolValue = value as? Bool {
-                            input[key] = boolValue ? "true" : "false"
+            for line in content.components(separatedBy: "\n") where !line.isEmpty {
+                if line.contains("\"tool_result\""),
+                   let lineData = line.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                   let messageDict = json["message"] as? [String: Any],
+                   let contentArray = messageDict["content"] as? [[String: Any]] {
+                    for block in contentArray {
+                        if block["type"] as? String == "tool_result",
+                           let toolUseId = block["tool_use_id"] as? String {
+                            completedToolIds.insert(toolUseId)
                         }
                     }
                 }
-
-                let isCompleted = completedToolIds.contains(toolId)
-                let timestamp = json["timestamp"] as? String
-
-                tools.append(SubagentToolInfo(
-                    id: toolId,
-                    name: toolName,
-                    input: input,
-                    isCompleted: isCompleted,
-                    timestamp: timestamp
-                ))
             }
-        }
+
+            for line in content.components(separatedBy: "\n") where !line.isEmpty {
+                guard line.contains("\"tool_use\""),
+                      let lineData = line.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                      let messageDict = json["message"] as? [String: Any],
+                      let contentArray = messageDict["content"] as? [[String: Any]] else {
+                    continue
+                }
+
+                for block in contentArray {
+                    guard block["type"] as? String == "tool_use",
+                          let toolId = block["id"] as? String,
+                          let toolName = block["name"] as? String,
+                          !seenToolIds.contains(toolId) else {
+                        continue
+                    }
+
+                    seenToolIds.insert(toolId)
+
+                    var input: [String: String] = [:]
+                    if let inputDict = block["input"] as? [String: Any] {
+                        for (key, value) in inputDict {
+                            if let strValue = value as? String {
+                                input[key] = strValue
+                            } else if let intValue = value as? Int {
+                                input[key] = String(intValue)
+                            } else if let boolValue = value as? Bool {
+                                input[key] = boolValue ? "true" : "false"
+                            }
+                        }
+                    }
+
+                    let isCompleted = completedToolIds.contains(toolId)
+                    let timestamp = json["timestamp"] as? String
+
+                    tools.append(SubagentToolInfo(
+                        id: toolId,
+                        name: toolName,
+                        input: input,
+                        isCompleted: isCompleted,
+                        timestamp: timestamp
+                    ))
+                }
+            }
+
+            return tools
+        }.value
 
         return tools
     }

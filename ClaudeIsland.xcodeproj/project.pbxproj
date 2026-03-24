@@ -10,10 +10,29 @@
 		FD0F42E72EE7ABA400980302 /* Mixpanel in Frameworks */ = {isa = PBXBuildFile; productRef = FD0F42E62EE7ABA400980302 /* Mixpanel */; };
 		FDA49F7D2EE11E3C00F9612E /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = FD33FD722EDF32D7002A6548 /* Markdown */; };
 		FDA49F7E2EE11E3C00F9612E /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = FDA49F7F2EE11E3C00F9612E /* Sparkle */; };
+		FD33FD802EDF32D7002A6548 /* LRUCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD33FD812EDF32D7002A6548 /* LRUCacheTests.swift */; };
+		FD33FD822EDF32D7002A6548 /* SidebarProjectGroupingSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD33FD832EDF32D7002A6548 /* SidebarProjectGroupingSupportTests.swift */; };
+		FD33FD842EDF32D7002A6548 /* ChatMessagePaginationSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD33FD852EDF32D7002A6548 /* ChatMessagePaginationSupportTests.swift */; };
+		FD33FD862EDF32D7002A6548 /* GlobalSessionSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD33FD872EDF32D7002A6548 /* GlobalSessionSupportTests.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		FD33FD882EDF32D7002A6548 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = FD33FD552EDF32D7002A6548 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = FD33FD5C2EDF32D7002A6548;
+			remoteInfo = ClaudeIsland;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		FD33FD5D2EDF32D7002A6548 /* Claude Island.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Claude Island.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		FD33FD892EDF32D7002A6548 /* ClaudeIslandTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ClaudeIslandTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		FD33FD812EDF32D7002A6548 /* LRUCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LRUCacheTests.swift; sourceTree = "<group>"; };
+		FD33FD832EDF32D7002A6548 /* SidebarProjectGroupingSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarProjectGroupingSupportTests.swift; sourceTree = "<group>"; };
+		FD33FD852EDF32D7002A6548 /* ChatMessagePaginationSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessagePaginationSupportTests.swift; sourceTree = "<group>"; };
+		FD33FD872EDF32D7002A6548 /* GlobalSessionSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalSessionSupportTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -48,6 +67,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		FD33FD8A2EDF32D7002A6548 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -55,6 +81,7 @@
 			isa = PBXGroup;
 			children = (
 				FD33FD5F2EDF32D7002A6548 /* ClaudeIsland */,
+				FD33FD8B2EDF32D7002A6548 /* ClaudeIslandTests */,
 				FD33FD5E2EDF32D7002A6548 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -63,8 +90,20 @@
 			isa = PBXGroup;
 			children = (
 				FD33FD5D2EDF32D7002A6548 /* Claude Island.app */,
+				FD33FD892EDF32D7002A6548 /* ClaudeIslandTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		FD33FD8B2EDF32D7002A6548 /* ClaudeIslandTests */ = {
+			isa = PBXGroup;
+			children = (
+				FD33FD812EDF32D7002A6548 /* LRUCacheTests.swift */,
+				FD33FD832EDF32D7002A6548 /* SidebarProjectGroupingSupportTests.swift */,
+				FD33FD852EDF32D7002A6548 /* ChatMessagePaginationSupportTests.swift */,
+				FD33FD872EDF32D7002A6548 /* GlobalSessionSupportTests.swift */,
+			);
+			path = ClaudeIslandTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -95,6 +134,23 @@
 			productReference = FD33FD5D2EDF32D7002A6548 /* Claude Island.app */;
 			productType = "com.apple.product-type.application";
 		};
+		FD33FD8C2EDF32D7002A6548 /* ClaudeIslandTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FD33FD8D2EDF32D7002A6548 /* Build configuration list for PBXNativeTarget "ClaudeIslandTests" */;
+			buildPhases = (
+				FD33FD8E2EDF32D7002A6548 /* Sources */,
+				FD33FD8A2EDF32D7002A6548 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				FD33FD8F2EDF32D7002A6548 /* PBXTargetDependency */,
+			);
+			name = ClaudeIslandTests;
+			productName = ClaudeIslandTests;
+			productReference = FD33FD892EDF32D7002A6548 /* ClaudeIslandTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -107,6 +163,10 @@
 				TargetAttributes = {
 					FD33FD5C2EDF32D7002A6548 = {
 						CreatedOnToolsVersion = 26.1.1;
+					};
+					FD33FD8C2EDF32D7002A6548 = {
+						CreatedOnToolsVersion = 26.1.1;
+						TestTargetID = FD33FD5C2EDF32D7002A6548;
 					};
 				};
 			};
@@ -130,6 +190,7 @@
 			projectRoot = "";
 			targets = (
 				FD33FD5C2EDF32D7002A6548 /* ClaudeIsland */,
+				FD33FD8C2EDF32D7002A6548 /* ClaudeIslandTests */,
 			);
 		};
 /* End PBXProject section */
@@ -152,7 +213,26 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		FD33FD8E2EDF32D7002A6548 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FD33FD802EDF32D7002A6548 /* LRUCacheTests.swift in Sources */,
+				FD33FD822EDF32D7002A6548 /* SidebarProjectGroupingSupportTests.swift in Sources */,
+				FD33FD842EDF32D7002A6548 /* ChatMessagePaginationSupportTests.swift in Sources */,
+				FD33FD862EDF32D7002A6548 /* GlobalSessionSupportTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		FD33FD8F2EDF32D7002A6548 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = FD33FD5C2EDF32D7002A6548 /* ClaudeIsland */;
+			targetProxy = FD33FD882EDF32D7002A6548 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		FD33FD662EDF32D8002A6548 /* Debug */ = {
@@ -345,6 +425,40 @@
 			};
 			name = Release;
 		};
+		FD33FD902EDF32D7002A6548 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.celestial.ClaudeIslandTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Claude Island.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Claude Island";
+			};
+			name = Debug;
+		};
+		FD33FD912EDF32D7002A6548 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.celestial.ClaudeIslandTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Claude Island.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Claude Island";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -362,6 +476,15 @@
 			buildConfigurations = (
 				FD33FD692EDF32D8002A6548 /* Debug */,
 				FD33FD6A2EDF32D8002A6548 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		FD33FD8D2EDF32D7002A6548 /* Build configuration list for PBXNativeTarget "ClaudeIslandTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FD33FD902EDF32D7002A6548 /* Debug */,
+				FD33FD912EDF32D7002A6548 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

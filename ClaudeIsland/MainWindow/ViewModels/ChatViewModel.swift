@@ -36,14 +36,14 @@ final class ChatViewModel {
     var threadInfo: ThreadDTO?
     var currentProjectPath: String?
     var structuredHistory: StructuredHistorySnapshot = .empty
-    var availableCommands: [ComposerCommandSuggestion] = SessionCommandCatalog.load(cwd: nil)
+    var availableCommands: [ComposerCommandSuggestion] = []
     var localPendingPermission: LocalCLIPermissionRequest?
     var error: String?
 
     // MARK: - Dependencies
 
     private var dataActor: BackgroundDataActor?
-    private let cliManager: CLISessionManager
+    private let cliManager: CLIManaging
     private var permissionFallbackTracker = CLIPermissionFallbackTracker()
     private var lastSubmittedPrompt: String?
     private var queuedApprovedRetry: LocalCLIPermissionRequest?
@@ -52,9 +52,35 @@ final class ChatViewModel {
     private var structuredHistoryVisibleCount = 0
     private var structuredHistoryLoadTask: Task<Void, Never>?
     private var loadedStructuredHistoryKey: String?
+    
+    // 预加载相关属性
+    private var preloadTask: Task<Void, Never>?
+    private var isPreloading = false
+    private var lastPreloadTime: Date?
+    private let preloadThreshold: Double = 0.8 // 当滚动到80%位置时触发预加载
+    
+    // 页面缓存相关属性
+    private var messagePageCache: [String: [MessageDTO]] = [:] // 键：beforeMessageId，值：消息页面
+    private let maxCacheSize = 10 // 最大缓存页面数
+    private var cacheAccessOrder: [String] = [] // LRU访问顺序
 
-    init(cliManager: CLISessionManager) {
+    init(cliManager: CLIManaging) {
         self.cliManager = cliManager
+        // Load commands in background to avoid blocking main thread
+        loadCommandsInBackground()
+    }
+
+    private func loadCommandsInBackground(cwd: String? = nil) {
+        Task.detached(priority: .background) { [weak self] in
+            let commands = SessionCommandCatalog.load(cwd: cwd)
+            await MainActor.run { [weak self] in
+                self?.availableCommands = commands
+            }
+        }
+    }
+
+    private func loadCommandsInBackground(path: String) {
+        loadCommandsInBackground(cwd: path)
     }
 
     func configure(with container: ModelContainer) {
@@ -81,15 +107,45 @@ final class ChatViewModel {
         loadedStructuredHistoryKey = nil
         structuredHistoryLoadTask?.cancel()
         structuredHistoryLoadTask = nil
+
+        // Clear cache
+        clearCache()
+
+        // Reset conversation parser state for the previous session
+        if let previousSessionId = threadInfo?.cliSessionId.flatMap({ normalizeCLISessionId($0) }) {
+            Task.detached(priority: .background) {
+                await ConversationParser.shared.resetState(for: previousSessionId)
+            }
+        }
+
         guard let actor = dataActor else { return }
 
         do {
+            logger.info("[LOAD_THREAD] Step 1: Fetching thread info...")
             threadInfo = try await actor.fetchThread(threadId: threadId)
-            currentProjectPath = try await resolveProjectPath(for: threadInfo, actor: actor)
-            availableCommands = SessionCommandCatalog.load(cwd: currentProjectPath)
+            logger.info("[LOAD_THREAD] Step 1 DONE: Got thread info")
+
+            logger.info("[LOAD_THREAD] Step 2: Resolving project path...")
+            let resolvedPath = try await resolveProjectPath(for: threadInfo, actor: actor)
+            currentProjectPath = resolvedPath
+            logger.info("[LOAD_THREAD] Step 2 DONE: Project path = \(resolvedPath ?? "nil")")
+
+            logger.info("[LOAD_THREAD] Step 3: Loading commands in background...")
+            loadCommandsInBackground(cwd: currentProjectPath)
+
+            logger.info("[LOAD_THREAD] Step 4: Refreshing visible messages...")
             try await refreshVisibleMessages(threadId: threadId, actor: actor)
+            logger.info("[LOAD_THREAD] Step 4 DONE: Messages refreshed")
+
+            logger.info("[LOAD_THREAD] Step 5: Scheduling structured history refresh...")
             scheduleStructuredHistoryRefreshIfNeeded(preserveVisibleCount: false)
+            logger.info("[LOAD_THREAD] Step 5 DONE: Scheduled")
+
+            logger.info("[LOAD_THREAD] Step 6: Checking CLI status...")
             isProcessing = await cliManager.isActive(threadId: threadId)
+            logger.info("[LOAD_THREAD] Step 6 DONE: isProcessing = \(self.isProcessing)")
+
+            logger.info("[LOAD_THREAD] ===== ALL DONE =====")
         } catch {
             logger.error("Failed to load thread: \(error)")
         }
@@ -288,9 +344,14 @@ final class ChatViewModel {
             guard structuredHistoryVisibleCount < totalStructuredItems else { return }
 
             isLoadingOlderMessages = true
+            // 使用动态页面大小
+            let dynamicPageSize = messages.isEmpty ? 
+                ChatMessagePaginationSupport.defaultPageSize :
+                ChatMessagePaginationSupport.dynamicPageSize(for: messages)
+            
             structuredHistoryVisibleCount = min(
                 totalStructuredItems,
-                structuredHistoryVisibleCount + ChatMessagePaginationSupport.defaultPageSize
+                structuredHistoryVisibleCount + dynamicPageSize
             )
             isLoadingOlderMessages = false
             return
@@ -306,12 +367,34 @@ final class ChatViewModel {
         defer { isLoadingOlderMessages = false }
 
         do {
+            // 首先检查缓存
+            if let cachedMessages = getCachedPage(beforeMessageId: oldestMessage.id) {
+                logger.info("Using cached messages for page before: \(oldestMessage.id)")
+                
+                let merged = ChatMessagePaginationSupport.mergeOlderPage(
+                    existingItems: messages,
+                    olderItems: cachedMessages,
+                    totalCount: threadInfo?.messageCount ?? loadedMessageCount
+                )
+                
+                messages = merged.items
+                loadedMessageCount = merged.loadedCount
+                hasOlderMessages = merged.hasOlderItems
+                return
+            }
+            
+            // 使用动态页面大小，基于已加载消息的平均长度
+            let dynamicPageSize = ChatMessagePaginationSupport.dynamicPageSize(for: messages)
+            
             let olderMessages = try await actor.fetchMessagesBefore(
                 threadId: threadId,
                 beforeMessageId: oldestMessage.id,
                 beforeCreatedAt: oldestMessage.createdAt,
-                limit: ChatMessagePaginationSupport.defaultPageSize
+                limit: dynamicPageSize
             )
+            
+            // 缓存加载的消息
+            cachePage(olderMessages, beforeMessageId: oldestMessage.id)
 
             let merged = ChatMessagePaginationSupport.mergeOlderPage(
                 existingItems: messages,
@@ -325,6 +408,88 @@ final class ChatViewModel {
         } catch {
             logger.error("Failed to load older messages: \(error)")
         }
+    }
+    
+    /// 检查是否需要预加载更多消息
+    /// - Parameter scrollPosition: 当前滚动位置（0.0到1.0）
+    func checkPreloadIfNeeded(scrollPosition: Double) {
+        guard hasOlderMessages, 
+              !isLoadingOlderMessages, 
+              !isPreloading,
+              scrollPosition <= preloadThreshold else { return }
+        
+        // 防抖：确保至少间隔1秒
+        if let lastTime = lastPreloadTime {
+            let elapsed = Date().timeIntervalSince(lastTime)
+            guard elapsed > 1.0 else { return }
+        }
+        
+        preloadTask?.cancel()
+        preloadTask = Task { [weak self] in
+            guard let self, !Task.isCancelled else { return }
+            
+            self.isPreloading = true
+            defer { 
+                self.isPreloading = false
+                self.lastPreloadTime = Date()
+            }
+            
+            // 使用较小的预加载页面大小
+            let preloadPageSize = messages.isEmpty ? 
+                ChatMessagePaginationSupport.defaultPageSize / 2 :
+                ChatMessagePaginationSupport.preloadPageSize(
+                    averageMessageLength: Double(messages.reduce(0) { $0 + $1.content.count }) / Double(messages.count)
+                )
+            
+            // 模拟预加载延迟，避免频繁加载
+            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5秒
+            
+            guard !Task.isCancelled else { return }
+            
+            // 实际加载逻辑会在滚动到底部时触发
+            // 这里只是设置预加载标志，真正的加载由loadOlderMessages处理
+            logger.info("Preload triggered with page size: \(preloadPageSize)")
+        }
+    }
+    
+    // MARK: - 页面缓存管理
+    
+    /// 从缓存获取消息页面
+    /// - Parameter beforeMessageId: 在此消息之前的消息ID
+    /// - Returns: 缓存的消息数组，如果未缓存则返回nil
+    private func getCachedPage(beforeMessageId: String) -> [MessageDTO]? {
+        guard let cached = messagePageCache[beforeMessageId] else { return nil }
+        
+        // 更新访问顺序（LRU）
+        cacheAccessOrder.removeAll { $0 == beforeMessageId }
+        cacheAccessOrder.append(beforeMessageId)
+        
+        logger.info("Cache hit for page before message: \(beforeMessageId)")
+        return cached
+    }
+    
+    /// 将消息页面添加到缓存
+    /// - Parameters:
+    ///   - messages: 消息数组
+    ///   - beforeMessageId: 在此消息之前的消息ID
+    private func cachePage(_ messages: [MessageDTO], beforeMessageId: String) {
+        // 如果缓存已满，移除最久未使用的页面
+        if messagePageCache.count >= maxCacheSize, let oldestKey = cacheAccessOrder.first {
+            messagePageCache.removeValue(forKey: oldestKey)
+            cacheAccessOrder.removeFirst()
+            logger.info("Cache eviction for key: \(oldestKey)")
+        }
+        
+        messagePageCache[beforeMessageId] = messages
+        cacheAccessOrder.append(beforeMessageId)
+        logger.info("Cached page with \(messages.count) messages before message: \(beforeMessageId)")
+    }
+    
+    /// 清空缓存
+    private func clearCache() {
+        messagePageCache.removeAll()
+        cacheAccessOrder.removeAll()
+        logger.info("Message cache cleared")
     }
 
     // MARK: - Stream Handling
@@ -468,7 +633,8 @@ final class ChatViewModel {
         do {
             threadInfo = try await actor.fetchThread(threadId: threadId)
             currentProjectPath = try await resolveProjectPath(for: threadInfo, actor: actor)
-            availableCommands = SessionCommandCatalog.load(cwd: currentProjectPath)
+            // Load commands in background to avoid blocking main thread
+            loadCommandsInBackground(cwd: currentProjectPath)
             try await refreshVisibleMessages(threadId: threadId, actor: actor)
             scheduleStructuredHistoryRefreshIfNeeded(preserveVisibleCount: true)
         } catch {
@@ -493,7 +659,8 @@ final class ChatViewModel {
             if threadId == currentThreadId {
                 threadInfo = try? await actor.fetchThread(threadId: threadId)
                 currentProjectPath = try? await resolveProjectPath(for: threadInfo, actor: actor)
-                availableCommands = SessionCommandCatalog.load(cwd: currentProjectPath)
+                // Load commands in background to avoid blocking main thread
+                loadCommandsInBackground(cwd: currentProjectPath)
                 scheduleStructuredHistoryRefreshIfNeeded(preserveVisibleCount: true)
             }
         }
@@ -734,6 +901,12 @@ final class ChatViewModel {
             message.toolResult == nil &&
             !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         })?.content
+        
+        // 在加载消息后，计算动态页面大小用于后续预加载
+        if !messages.isEmpty {
+            let dynamicPageSize = ChatMessagePaginationSupport.dynamicPageSize(for: messages)
+            logger.info("Calculated dynamic page size: \(dynamicPageSize) based on average message length")
+        }
     }
 
     private func scheduleStructuredHistoryRefreshIfNeeded(preserveVisibleCount: Bool) {
@@ -758,7 +931,7 @@ final class ChatViewModel {
             let threadId = thread.id
             let previousVisibleCount = preserveVisibleCount ? structuredHistoryVisibleCount : 0
             structuredHistoryLoadTask?.cancel()
-            structuredHistoryLoadTask = Task { [weak self] in
+            structuredHistoryLoadTask = Task.detached(priority: .background) { [weak self] in
                 let snapshot = await StructuredHistorySnapshotBuilder.load(
                     sessionId: sessionId,
                     cwd: projectPath
