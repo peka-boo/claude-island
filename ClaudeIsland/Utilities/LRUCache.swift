@@ -148,24 +148,10 @@ extension LRUCache {
         var value: Value
         var prev: Node?
         var next: Node?
-        
+
         init(key: Key, value: Value) {
             self.key = key
             self.value = value
         }
-    }
-}
-
-// MARK: - Convenience extensions
-
-extension LRUCache where Key == String {
-    /// Sets a value for the given string key (convenience).
-    func set(_ key: String, value: Value) {
-        set(key, value: value)
-    }
-    
-    /// Returns the value for the given string key (convenience).
-    func get(_ key: String) -> Value? {
-        get(key)
     }
 }
