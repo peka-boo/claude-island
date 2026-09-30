@@ -16,10 +16,12 @@
 
 ## Features
 
+- **Main Window** — A full Claude Code client: dual-mode sidebar with project-grouped sessions, chat history, and SwiftData storage
+- **Chat With Claude** — Start conversations from the app via the Claude Code CLI, with streaming responses and interactive question prompts
 - **Notch UI** — Animated overlay that expands from the MacBook notch
 - **Live Session Monitoring** — Track multiple Claude Code sessions in real-time
 - **Permission Approvals** — Approve or deny tool executions directly from the notch
-- **Chat History** — View full conversation history with markdown rendering
+- **Chat History** — View full conversation history with markdown rendering and pagination
 - **Auto-Setup** — Hooks install automatically on first launch
 
 ## Requirements
@@ -37,9 +39,9 @@ xcodebuild -scheme ClaudeIsland -configuration Release build
 
 ## How It Works
 
-Claude Island installs hooks into `~/.claude/hooks/` that communicate session state via a Unix socket. The app listens for events and displays them in the notch overlay.
+Claude Island installs a lightweight bash hook script at `~/.claude-island/hooks/hook-sender.sh` and registers it with Claude Code. The app runs a local HTTP server; the hook POSTs session events (tool calls, permission requests, waiting-for-input) to it as JSON.
 
-When Claude needs permission to run a tool, the notch expands with approve/deny buttons—no need to switch to the terminal.
+Events show up in both the notch overlay and the main window. When Claude needs permission to run a tool, the notch expands with approve/deny buttons—no need to switch to the terminal.
 
 ## Analytics
 

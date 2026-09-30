@@ -306,7 +306,9 @@ struct ChatView: View {
             inputText: $inputText,
             isInputFocused: $isInputFocused,
             isSendingMessage: isSendingMessage,
-            sendMessage: { sendMessage() }
+            isProcessing: isProcessing,
+            sendMessage: { sendMessage() },
+            interruptSession: { interruptSession() }
         )
     }
 
@@ -451,6 +453,12 @@ struct ChatView: View {
 
     private func sendToSession(_ text: String) async -> Bool {
         await MonitoredSessionMessageSender.shared.sendMessage(text, to: session)
+    }
+
+    private func interruptSession() {
+        Task {
+            await sessionMonitor.interruptSession(sessionId: sessionId)
+        }
     }
 }
 

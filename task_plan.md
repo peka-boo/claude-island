@@ -1,62 +1,58 @@
-# 优化Claude Island项目的分页加载策略
+# Task Plan: Unify Notch and Settings Hook Logic
 
-## 目标
-优化Claude Island项目的分页加载策略，提高性能和用户体验。
+## Goal
+Make Notch hook controls and Settings hook controls use the same source of truth and the same side effects so hook installation/monitoring behavior stays consistent.
 
-## 当前状态分析
+## Current Phase
+Phase 5
 
-### 1. ChatMessagePaginationSupport.swift
-- 固定页面大小为80
-- 提供初始可见计数、状态计算和合并旧页面的方法
-- 没有动态页面大小调整
+## Phases
 
-### 2. DataStore.swift
-- 使用FetchDescriptor和fetchLimit进行分页查询
-- 有fetchRecentMessages和fetchMessagesBefore方法
-- 没有缓存机制
+### Phase 1: Requirements & Discovery
+- [x] Understand user intent
+- [x] Identify the split source of truth between Notch and Settings hook toggles
+- [x] Document findings in findings.md
+- **Status:** complete
 
-### 3. ChatViewModel.swift
-- 使用ChatMessagePaginationSupport.defaultPageSize（80）进行分页
-- loadOlderMessages()函数加载更多消息
-- 没有预加载逻辑
+### Phase 2: Planning & Structure
+- [x] Define the shared coordinator approach
+- [x] Choose the safest integration points
+- [x] Document decisions with rationale
+- **Status:** complete
 
-## 优化方案
+### Phase 3: Implementation
+- [x] Add or update focused tests first where behavior changes are practical to verify
+- [x] Implement unified hook logic
+- [x] Test incrementally
+- **Status:** complete
 
-### 阶段1：分析当前实现（已完成）
-- [x] 读取ChatMessagePaginationSupport.swift
-- [x] 读取DataStore.swift中的分页查询
-- [x] 读取ChatViewModel.swift中的分页使用
+### Phase 4: Testing & Verification
+- [x] Verify focused tests and build paths relevant to the changes
+- [x] Document test results in progress.md
+- [x] Fix any issues found
+- **Status:** complete
 
-### 阶段2：设计动态页面大小策略
-- [ ] 创建可配置的分页大小策略
-- [ ] 实现基于消息内容长度的自适应算法
-- [ ] 更新ChatMessagePaginationSupport支持动态页面大小
+### Phase 5: Delivery
+- [x] Review changed files and summarize outcomes
+- [x] Ensure deliverables are complete
+- [ ] Deliver to user
+- **Status:** in_progress
 
-### 阶段3：实现预加载策略
-- [ ] 在用户滚动接近底部时预加载下一页
-- [ ] 实现智能预加载，避免不必要的数据加载
-- [ ] 考虑网络/磁盘延迟
+## Key Questions
+1. Which state should be the source of truth for hook enablement?
+2. Which code paths currently toggle hooks without going through that shared state?
 
-### 阶段4：实现缓存优化
-- [ ] 缓存已加载的消息页面
-- [ ] 实现页面缓存淘汰策略
-- [ ] 减少重复查询
+## Decisions Made
+| Decision | Rationale |
+|----------|-----------|
+| Treat `AppSettings.hookMonitorEnabled` as the user-facing source of truth | Settings, sidebar, popup visibility, and monitor startup logic already key off this value. |
+| Centralize side effects in `HookMonitorCoordinator` | Notch, Settings, and launch observers now all run the same enable/disable behavior. |
 
-### 阶段5：优化分页查询
-- [ ] 优化SwiftData查询谓词
-- [ ] 添加适当的索引以提高查询性能
-- [ ] 考虑使用批处理加载
+## Errors Encountered
+| Error | Attempt | Resolution |
+|-------|---------|------------|
+| New main-actor warnings after the first coordinator wiring | 1 | Replaced direct method references with explicit closures in the SwiftUI call sites. |
 
-### 阶段6：测试和验证
-- [ ] 确保功能保持不变
-- [ ] 运行构建验证
-- [ ] 测试分页加载行为
-
-## 时间表
-1. 阶段2：动态页面大小策略 - 30分钟
-2. 阶段3：预加载策略 - 45分钟
-3. 阶段4：缓存优化 - 30分钟
-4. 阶段5：查询优化 - 30分钟
-5. 阶段6：测试验证 - 30分钟
-
-总计：约3小时
+## Notes
+- Re-read this plan before major decisions.
+- Prefer changes that improve both perceived performance and clarity of interaction.

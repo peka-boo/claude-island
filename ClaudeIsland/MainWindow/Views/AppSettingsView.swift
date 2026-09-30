@@ -58,7 +58,19 @@ struct AppSettingsView: View {
                     }
                 }
                 .onChange(of: hookMonitorEnabled) { _, newValue in
-                    AppSettings.setHookMonitorEnabled(newValue)
+                    HookMonitorCoordinator.setEnabled(
+                        newValue,
+                        persist: { enabled in
+                            AppSettings.setHookMonitorEnabled(enabled)
+                        },
+                        installHooks: {
+                            HookInstaller.installIfNeeded()
+                        },
+                        uninstallHooks: {
+                            HookInstaller.uninstall()
+                        },
+                        monitorController: ClaudeSessionMonitor.shared
+                    )
                 }
             } footer: {
                 Text("When enabled, installs a hook script into ~/.claude/settings.json to capture events from all CLI sessions. Starts a local HTTP server on port \(AppSettings.serverPort).")

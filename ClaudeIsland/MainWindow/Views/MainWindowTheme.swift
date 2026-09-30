@@ -10,20 +10,22 @@ import SwiftUI
 enum MainWindowTheme {
     static let uiScale: CGFloat = 0.8
     static var conversationColumnMaxWidth: CGFloat { scaled(1188) }
-    static let backgroundTop = Color(red: 0.10, green: 0.08, blue: 0.07)
+    static let backgroundTop = Color(red: 0.11, green: 0.09, blue: 0.08)
     static let backgroundBottom = Color(red: 0.03, green: 0.03, blue: 0.03)
+    static let backgroundWarmGlow = Color(red: 0.46, green: 0.28, blue: 0.18)
+    static let backgroundCoolGlow = Color(red: 0.20, green: 0.30, blue: 0.42)
     static let sidebarRail = Color(red: 0.12, green: 0.10, blue: 0.09)
     static let sidebarPanel = Color(red: 0.11, green: 0.09, blue: 0.08)
     static let workspace = Color(red: 0.02, green: 0.02, blue: 0.02)
-    static let panel = Color.white.opacity(0.035)
-    static let panelElevated = Color.white.opacity(0.055)
+    static let panel = Color.white.opacity(0.04)
+    static let panelElevated = Color.white.opacity(0.062)
     static let panelHover = Color.white.opacity(0.08)
     static let panelSelected = Color.white.opacity(0.10)
     static let border = Color.white.opacity(0.06)
-    static let borderStrong = Color.white.opacity(0.11)
+    static let borderStrong = Color.white.opacity(0.13)
     static let separator = Color.white.opacity(0.06)
     static let textPrimary = Color.white.opacity(0.92)
-    static let textSecondary = Color.white.opacity(0.58)
+    static let textSecondary = Color.white.opacity(0.64)
     static let textMuted = Color.white.opacity(0.34)
     static let accent = Color(red: 0.85, green: 0.47, blue: 0.34)
     static let hoverFill = Color.white.opacity(0.08)
@@ -79,6 +81,26 @@ struct MainWindowBackdrop: View {
                 colors: [MainWindowTheme.backgroundTop, MainWindowTheme.backgroundBottom],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
+            )
+
+            RadialGradient(
+                colors: [
+                    MainWindowTheme.backgroundWarmGlow.opacity(0.22),
+                    .clear
+                ],
+                center: .topTrailing,
+                startRadius: 18,
+                endRadius: 420
+            )
+
+            RadialGradient(
+                colors: [
+                    MainWindowTheme.backgroundCoolGlow.opacity(0.14),
+                    .clear
+                ],
+                center: .bottomLeading,
+                startRadius: 12,
+                endRadius: 360
             )
         }
         .ignoresSafeArea()

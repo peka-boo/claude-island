@@ -19,6 +19,7 @@ struct ChatContentView: View {
     @State private var interactiveReplyDraft = ""
     @State private var isSendingInteractiveReply = false
     @State private var hasAppliedInitialTranscriptPosition = false
+    @State private var lastStreamingAutoScrollAt: Date?
 
     private var canTerminate: Bool {
         viewModel.isStreaming || viewModel.isProcessing || viewModel.threadInfo?.status == .active
@@ -203,6 +204,7 @@ struct ChatContentView: View {
         .animation(MainWindowTheme.panelOpenAnimation, value: currentPermissionId ?? "")
         .task(id: threadId) {
             hasAppliedInitialTranscriptPosition = false
+            lastStreamingAutoScrollAt = nil
             await viewModel.loadThread(threadId)
             renameDraft = viewModel.threadInfo?.title ?? "New Chat"
             isRenaming = false
@@ -222,59 +224,98 @@ struct ChatContentView: View {
     }
 
     private var chatHeader: some View {
-        HStack(alignment: .center, spacing: 16) {
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 10) {
-                    if isRenaming {
-                        TextField("Session title", text: $renameDraft)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: MainWindowTheme.scaled(24), weight: .medium))
-                            .foregroundStyle(MainWindowTheme.textPrimary)
-                            .frame(width: MainWindowTheme.scaled(320))
-                            .onSubmit(commitRename)
-                    } else {
-                        Text(viewModel.threadInfo?.title ?? "New Chat")
-                            .font(.system(size: MainWindowTheme.scaled(24), weight: .medium))
-                            .foregroundStyle(MainWindowTheme.textPrimary)
-                            .lineLimit(1)
-                    }
-
-                    Button(action: {
+        VStack(alignment: .leading, spacing: MainWindowTheme.scaled(14)) {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 10) {
                         if isRenaming {
-                            commitRename()
+                            TextField("Session title", text: $renameDraft)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: MainWindowTheme.scaled(24), weight: .medium))
+                                .foregroundStyle(MainWindowTheme.textPrimary)
+                                .frame(width: MainWindowTheme.scaled(320))
+                                .onSubmit(commitRename)
                         } else {
-                            renameDraft = viewModel.threadInfo?.title ?? "New Chat"
-                            isRenaming = true
+                            Text(viewModel.threadInfo?.title ?? "New Chat")
+                                .font(.system(size: MainWindowTheme.scaled(24), weight: .medium))
+                                .foregroundStyle(MainWindowTheme.textPrimary)
+                                .lineLimit(1)
                         }
-                    }) {
-                        Image(systemName: isRenaming ? "checkmark.circle.fill" : "square.and.pencil")
-                            .font(.system(size: MainWindowTheme.scaled(13), weight: .medium))
-                            .foregroundStyle(isRenaming ? TerminalColors.green : MainWindowTheme.textMuted)
+
+                        Button(action: {
+                            if isRenaming {
+                                commitRename()
+                            } else {
+                                renameDraft = viewModel.threadInfo?.title ?? "New Chat"
+                                isRenaming = true
+                            }
+                        }) {
+                            Image(systemName: isRenaming ? "checkmark.circle.fill" : "square.and.pencil")
+                                .font(.system(size: MainWindowTheme.scaled(13), weight: .medium))
+                                .foregroundStyle(isRenaming ? TerminalColors.green : MainWindowTheme.textMuted)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
-                }
 
-                HStack(spacing: 6) {
-                    Text("/")
-                        .foregroundStyle(MainWindowTheme.textMuted)
-
-                    Text(viewModel.threadInfo?.projectName ?? "Workspace")
+                    Text(canTerminate ? "Claude is live in this workspace" : "Ready for the next turn")
+                        .font(.system(size: MainWindowTheme.scaled(13), weight: .medium))
                         .foregroundStyle(MainWindowTheme.textSecondary)
                 }
-                .font(.system(size: MainWindowTheme.scaled(14)))
+
+                Spacer()
             }
 
-            Spacer()
+            HStack(spacing: MainWindowTheme.scaled(10)) {
+                headerChip(
+                    icon: "folder",
+                    title: viewModel.threadInfo?.projectName ?? "Workspace",
+                    tint: MainWindowTheme.textSecondary
+                )
 
-            if let branch = viewModel.threadInfo?.gitBranch {
-                HStack(spacing: MainWindowTheme.scaled(6)) {
-                    Image(systemName: "arrow.triangle.branch")
-                    Text(branch)
+                if let branch = viewModel.threadInfo?.gitBranch {
+                    headerChip(
+                        icon: "arrow.triangle.branch",
+                        title: branch,
+                        tint: MainWindowTheme.textSecondary
+                    )
                 }
-                .font(.system(size: MainWindowTheme.scaled(14), weight: .medium))
-                .foregroundStyle(MainWindowTheme.textSecondary)
+
+                headerChip(
+                    icon: canTerminate ? "waveform" : "checkmark.circle",
+                    title: canTerminate ? "Live session" : "Ready",
+                    tint: canTerminate ? TerminalColors.green : MainWindowTheme.textSecondary
+                )
             }
         }
+        .padding(.horizontal, MainWindowTheme.scaled(18))
+        .padding(.vertical, MainWindowTheme.scaled(16))
+        .mainWindowCard(
+            fill: MainWindowTheme.panelElevated,
+            border: MainWindowTheme.borderStrong,
+            radius: MainWindowTheme.scaled(24),
+            shadowOpacity: 0.12
+        )
+    }
+
+    private func headerChip(icon: String, title: String, tint: Color) -> some View {
+        HStack(spacing: MainWindowTheme.scaled(7)) {
+            Image(systemName: icon)
+                .font(.system(size: MainWindowTheme.scaled(11), weight: .semibold))
+            Text(title)
+                .lineLimit(1)
+        }
+        .font(.system(size: MainWindowTheme.scaled(12), weight: .medium))
+        .foregroundStyle(tint)
+        .padding(.horizontal, MainWindowTheme.scaled(12))
+        .padding(.vertical, MainWindowTheme.scaled(8))
+        .background(
+            Capsule(style: .continuous)
+                .fill(MainWindowTheme.panel)
+                .overlay(
+                    Capsule(style: .continuous)
+                        .strokeBorder(MainWindowTheme.border, lineWidth: 1)
+                )
+        )
     }
 
     private var messageList: some View {
@@ -387,9 +428,32 @@ struct ChatContentView: View {
                 }
             }
             .onChange(of: viewModel.currentStreamingText) { _, _ in
-                guard hasAppliedInitialTranscriptPosition else { return }
-                withOptionalAnimation(MainWindowTheme.softFadeAnimation) {
-                    scrollToBottom(with: proxy)
+                guard !viewModel.currentStreamingText.isEmpty,
+                      hasAppliedInitialTranscriptPosition else { return }
+
+                let now = Date()
+                let elapsedSinceLastAutoScroll = lastStreamingAutoScrollAt.map {
+                    now.timeIntervalSince($0)
+                }
+
+                switch ChatTranscriptScrollSupport.streamingScrollAction(
+                    hasAppliedInitialPosition: hasAppliedInitialTranscriptPosition,
+                    elapsedSinceLastAutoScroll: elapsedSinceLastAutoScroll
+                ) {
+                case .none:
+                    break
+                case .jumpToLatest:
+                    lastStreamingAutoScrollAt = now
+                    var transaction = Transaction()
+                    transaction.animation = nil
+                    withTransaction(transaction) {
+                        scrollToBottom(with: proxy)
+                    }
+                case .animateToLatest:
+                    lastStreamingAutoScrollAt = now
+                    withOptionalAnimation(MainWindowTheme.softFadeAnimation) {
+                        scrollToBottom(with: proxy)
+                    }
                 }
             }
         }
@@ -551,7 +615,11 @@ struct ChatContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             if !viewModel.currentThinkingText.isEmpty {
                 DisclosureGroup {
-                    MarkdownText(viewModel.currentThinkingText, color: MainWindowTheme.textSecondary, fontSize: 12)
+                    liveStreamingText(
+                        viewModel.currentThinkingText,
+                        color: MainWindowTheme.textSecondary,
+                        fontSize: 12
+                    )
                         .padding(.top, 8)
                 } label: {
                     HStack(spacing: 6) {
@@ -575,12 +643,32 @@ struct ChatContentView: View {
             }
 
             if !viewModel.currentStreamingText.isEmpty {
-                MarkdownText(viewModel.currentStreamingText, color: MainWindowTheme.textPrimary, fontSize: 15)
+                liveStreamingText(
+                    viewModel.currentStreamingText,
+                    color: MainWindowTheme.textPrimary,
+                    fontSize: 15
+                )
             }
 
             MainWindowStreamingStatusRow()
         }
         .padding(.horizontal, 2)
+    }
+
+    @ViewBuilder
+    private func liveStreamingText(_ text: String, color: Color, fontSize: CGFloat) -> some View {
+        switch StreamingResponseRenderingSupport.mode(isStreaming: viewModel.isStreaming) {
+        case .plainText:
+            Text(verbatim: text)
+                .font(.system(size: fontSize))
+                .foregroundStyle(color)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        case .markdown:
+            MarkdownText(text, color: color, fontSize: fontSize)
+        }
     }
 
     private func errorBubble(_ message: String) -> some View {

@@ -15,6 +15,7 @@ enum ChatTranscriptScrollAction: Equatable {
 
 enum ChatTranscriptScrollSupport {
     nonisolated static let bottomAnchorID = "transcript-bottom-anchor"
+    nonisolated static let streamingAutoScrollMinimumInterval: TimeInterval = 0.12
 
     nonisolated static func scrollAction<Item: Identifiable & Equatable>(
         oldItems: [Item],
@@ -38,5 +39,21 @@ enum ChatTranscriptScrollSupport {
 
     nonisolated static func bottomScrollTarget(hasVisibleContent: Bool) -> String? {
         hasVisibleContent ? bottomAnchorID : nil
+    }
+
+    nonisolated static func streamingScrollAction(
+        hasAppliedInitialPosition: Bool,
+        elapsedSinceLastAutoScroll: TimeInterval?,
+        minimumInterval: TimeInterval = ChatTranscriptScrollSupport.streamingAutoScrollMinimumInterval
+    ) -> ChatTranscriptScrollAction {
+        guard hasAppliedInitialPosition else {
+            return .none
+        }
+
+        guard let elapsedSinceLastAutoScroll else {
+            return .jumpToLatest
+        }
+
+        return elapsedSinceLastAutoScroll >= minimumInterval ? .jumpToLatest : .none
     }
 }

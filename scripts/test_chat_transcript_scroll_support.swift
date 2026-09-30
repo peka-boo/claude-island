@@ -60,6 +60,42 @@ struct ChatTranscriptScrollSupportTestRunner {
             "visible transcripts should scroll to the dedicated bottom anchor instead of the last content item"
         )
 
+        let noInitialStreamingScroll = ChatTranscriptScrollSupport.streamingScrollAction(
+            hasAppliedInitialPosition: false,
+            elapsedSinceLastAutoScroll: nil
+        )
+        assertTranscriptScroll(
+            noInitialStreamingScroll == .none,
+            "streaming updates should not scroll before the initial transcript position is applied"
+        )
+
+        let firstStreamingScroll = ChatTranscriptScrollSupport.streamingScrollAction(
+            hasAppliedInitialPosition: true,
+            elapsedSinceLastAutoScroll: nil
+        )
+        assertTranscriptScroll(
+            firstStreamingScroll == .jumpToLatest,
+            "the first streaming update should jump to the latest content"
+        )
+
+        let throttledStreamingScroll = ChatTranscriptScrollSupport.streamingScrollAction(
+            hasAppliedInitialPosition: true,
+            elapsedSinceLastAutoScroll: 0.05
+        )
+        assertTranscriptScroll(
+            throttledStreamingScroll == .none,
+            "rapid streaming updates should be throttled to avoid scroll jitter"
+        )
+
+        let resumedStreamingScroll = ChatTranscriptScrollSupport.streamingScrollAction(
+            hasAppliedInitialPosition: true,
+            elapsedSinceLastAutoScroll: 0.25
+        )
+        assertTranscriptScroll(
+            resumedStreamingScroll == .jumpToLatest,
+            "streaming updates should resume scrolling after the throttle interval"
+        )
+
         print("chat transcript scroll checks passed")
     }
 }

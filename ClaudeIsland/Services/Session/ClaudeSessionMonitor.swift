@@ -193,6 +193,11 @@ class ClaudeSessionMonitor: ClaudeSessionMonitoring {
         }
     }
 
+    func interruptSession(sessionId: String) async {
+        // Send interrupt signal to the CLI process
+        await CLISessionManager.shared.interruptSession(threadId: sessionId)
+    }
+
     func submitInteractiveResponse(sessionId: String, message: String) async -> Bool {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
@@ -475,6 +480,8 @@ class ClaudeSessionMonitor: ClaudeSessionMonitoring {
         cancellables.removeAll()
     }
 }
+
+extension ClaudeSessionMonitor: HookMonitorLifecycleControlling {}
 
 // MARK: - Interrupt Watcher Delegate
 

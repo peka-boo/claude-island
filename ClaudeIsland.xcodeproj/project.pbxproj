@@ -8,12 +8,12 @@
 
 /* Begin PBXBuildFile section */
 		FD0F42E72EE7ABA400980302 /* Mixpanel in Frameworks */ = {isa = PBXBuildFile; productRef = FD0F42E62EE7ABA400980302 /* Mixpanel */; };
-		FDA49F7D2EE11E3C00F9612E /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = FD33FD722EDF32D7002A6548 /* Markdown */; };
-		FDA49F7E2EE11E3C00F9612E /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = FDA49F7F2EE11E3C00F9612E /* Sparkle */; };
 		FD33FD802EDF32D7002A6548 /* LRUCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD33FD812EDF32D7002A6548 /* LRUCacheTests.swift */; };
 		FD33FD822EDF32D7002A6548 /* SidebarProjectGroupingSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD33FD832EDF32D7002A6548 /* SidebarProjectGroupingSupportTests.swift */; };
 		FD33FD842EDF32D7002A6548 /* ChatMessagePaginationSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD33FD852EDF32D7002A6548 /* ChatMessagePaginationSupportTests.swift */; };
 		FD33FD862EDF32D7002A6548 /* GlobalSessionSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD33FD872EDF32D7002A6548 /* GlobalSessionSupportTests.swift */; };
+		FDA49F7D2EE11E3C00F9612E /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = FD33FD722EDF32D7002A6548 /* Markdown */; };
+		FDA49F7E2EE11E3C00F9612E /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = FDA49F7F2EE11E3C00F9612E /* Sparkle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -28,11 +28,11 @@
 
 /* Begin PBXFileReference section */
 		FD33FD5D2EDF32D7002A6548 /* Claude Island.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Claude Island.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		FD33FD892EDF32D7002A6548 /* ClaudeIslandTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ClaudeIslandTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FD33FD812EDF32D7002A6548 /* LRUCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LRUCacheTests.swift; sourceTree = "<group>"; };
 		FD33FD832EDF32D7002A6548 /* SidebarProjectGroupingSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarProjectGroupingSupportTests.swift; sourceTree = "<group>"; };
 		FD33FD852EDF32D7002A6548 /* ChatMessagePaginationSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessagePaginationSupportTests.swift; sourceTree = "<group>"; };
 		FD33FD872EDF32D7002A6548 /* GlobalSessionSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalSessionSupportTests.swift; sourceTree = "<group>"; };
+		FD33FD892EDF32D7002A6548 /* ClaudeIslandTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ClaudeIslandTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */

@@ -307,13 +307,9 @@ actor ConversationParser {
 
     /// Parse only NEW messages since last call (efficient incremental updates)
     func parseIncremental(sessionId: String, cwd: String) async -> IncrementalParseResult {
-        Self.logger.info("[PARSE] parseIncremental called for \(sessionId)")
-
         let sessionFile = Self.sessionFilePath(sessionId: sessionId, cwd: cwd)
-        Self.logger.info("[PARSE] Session file path: \(sessionFile)")
 
         guard FileManager.default.fileExists(atPath: sessionFile) else {
-            Self.logger.info("[PARSE] File does not exist, returning empty")
             return IncrementalParseResult(
                 newMessages: [],
                 allMessages: [],
@@ -324,16 +320,11 @@ actor ConversationParser {
             )
         }
 
-        Self.logger.info("[PARSE] File exists, getting state...")
         // Get current state
         var state = incrementalState[sessionId] ?? IncrementalParseState()
-        Self.logger.info("[PARSE] State loaded, lastOffset: \(state.lastFileOffset), messages: \(state.messages.count)")
 
         // Parse directly without Task.detached to avoid actor isolation issues
-        Self.logger.info("[PARSE] Starting parseNewLines...")
-        let parseStart = Date()
         let newMessages = parseNewLines(filePath: sessionFile, state: &state)
-        Self.logger.info("[PARSE] parseNewLines completed in \(Date().timeIntervalSince(parseStart))s, newMessages: \(newMessages.count)")
 
         // Update actor state
         let clearDetected = state.clearPending
@@ -341,7 +332,6 @@ actor ConversationParser {
             state.clearPending = false
         }
         incrementalState[sessionId] = state
-        Self.logger.info("[PARSE] State updated, returning result")
 
         return IncrementalParseResult(
             newMessages: newMessages,

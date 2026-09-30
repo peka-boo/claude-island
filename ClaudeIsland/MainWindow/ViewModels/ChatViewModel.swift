@@ -52,6 +52,9 @@ final class ChatViewModel {
     private var structuredHistoryVisibleCount = 0
     private var structuredHistoryLoadTask: Task<Void, Never>?
     private var loadedStructuredHistoryKey: String?
+    private var streamingResponseBuffer = StreamingResponseBuffer()
+    private var pendingThinkingText: String?
+    private var streamingFlushTask: Task<Void, Never>?
     
     // 预加载相关属性
     private var preloadTask: Task<Void, Never>?
@@ -95,8 +98,7 @@ final class ChatViewModel {
         structuredHistory = .empty
         hasOlderMessages = false
         isLoadingOlderMessages = false
-        currentStreamingText = ""
-        currentThinkingText = ""
+        resetStreamingState()
         error = nil
         localPendingPermission = nil
         permissionFallbackTracker.reset()
@@ -121,31 +123,13 @@ final class ChatViewModel {
         guard let actor = dataActor else { return }
 
         do {
-            logger.info("[LOAD_THREAD] Step 1: Fetching thread info...")
             threadInfo = try await actor.fetchThread(threadId: threadId)
-            logger.info("[LOAD_THREAD] Step 1 DONE: Got thread info")
-
-            logger.info("[LOAD_THREAD] Step 2: Resolving project path...")
             let resolvedPath = try await resolveProjectPath(for: threadInfo, actor: actor)
             currentProjectPath = resolvedPath
-            logger.info("[LOAD_THREAD] Step 2 DONE: Project path = \(resolvedPath ?? "nil")")
-
-            logger.info("[LOAD_THREAD] Step 3: Loading commands in background...")
             loadCommandsInBackground(cwd: currentProjectPath)
-
-            logger.info("[LOAD_THREAD] Step 4: Refreshing visible messages...")
             try await refreshVisibleMessages(threadId: threadId, actor: actor)
-            logger.info("[LOAD_THREAD] Step 4 DONE: Messages refreshed")
-
-            logger.info("[LOAD_THREAD] Step 5: Scheduling structured history refresh...")
             scheduleStructuredHistoryRefreshIfNeeded(preserveVisibleCount: false)
-            logger.info("[LOAD_THREAD] Step 5 DONE: Scheduled")
-
-            logger.info("[LOAD_THREAD] Step 6: Checking CLI status...")
             isProcessing = await cliManager.isActive(threadId: threadId)
-            logger.info("[LOAD_THREAD] Step 6 DONE: isProcessing = \(self.isProcessing)")
-
-            logger.info("[LOAD_THREAD] ===== ALL DONE =====")
         } catch {
             logger.error("Failed to load thread: \(error)")
         }
@@ -175,8 +159,7 @@ final class ChatViewModel {
             lastSubmittedPrompt = text
             isProcessing = true
             isStreaming = true
-            currentStreamingText = ""
-            currentThinkingText = ""
+            resetStreamingState()
             error = nil
 
             do {
@@ -251,8 +234,7 @@ final class ChatViewModel {
         await cliManager.stopSession(threadId: threadId)
         isProcessing = false
         isStreaming = false
-        currentStreamingText = ""
-        currentThinkingText = ""
+        resetStreamingState()
         localPendingPermission = nil
         permissionFallbackTracker.reset()
         queuedApprovedRetry = nil
@@ -513,10 +495,10 @@ final class ChatViewModel {
     private func handleStreamEvent(_ event: CLIStreamEvent) {
         switch event {
         case .thinking(let text):
-            currentThinkingText = text
+            updateThinkingText(text)
 
         case .text(let text):
-            currentStreamingText += text
+            appendStreamingText(text)
 
         case .toolUse(_, let name, let input):
             permissionFallbackTracker.consume(
@@ -559,11 +541,13 @@ final class ChatViewModel {
             }
 
         case .result(let info):
+            flushPendingStreamUpdatesImmediately()
+
             // Save the final assistant message
             Task {
                 guard let actor = dataActor, let threadId = currentThreadId else { return }
 
-                let assistantText = currentStreamingText.isEmpty ? info.result : currentStreamingText
+                let assistantText = streamingResponseBuffer.resolvedText(fallback: info.result)
 
                 if !assistantText.isEmpty {
                     _ = try? await actor.appendMessage(
@@ -583,8 +567,7 @@ final class ChatViewModel {
                     cliSessionId: info.sessionId
                 )
                 await reloadThread(threadId)
-                currentStreamingText = ""
-                currentThinkingText = ""
+                resetStreamingState()
                 isProcessing = false
                 isStreaming = false
                 if localPendingPermission == nil {
@@ -600,6 +583,7 @@ final class ChatViewModel {
             persistSessionIdentity(sessionId, for: currentThreadId)
 
         case .error(let message):
+            flushPendingStreamUpdatesImmediately()
             error = message
             isProcessing = false
             isStreaming = false
@@ -612,8 +596,7 @@ final class ChatViewModel {
     private func handleProcessEnded() {
         isProcessing = false
         isStreaming = false
-        currentStreamingText = ""
-        currentThinkingText = ""
+        resetStreamingState()
 
         // Reload messages to get final state
         Task {
@@ -688,8 +671,7 @@ final class ChatViewModel {
         lastSubmittedPrompt = pending.retryPrompt
         isProcessing = true
         isStreaming = true
-        currentStreamingText = ""
-        currentThinkingText = ""
+        resetStreamingState()
         error = nil
 
         await setupStreamHandler(threadId: threadId)
@@ -728,8 +710,7 @@ final class ChatViewModel {
         lastSubmittedPrompt = queued.prompt
         isProcessing = true
         isStreaming = true
-        currentStreamingText = ""
-        currentThinkingText = ""
+        resetStreamingState()
         error = nil
 
         await setupStreamHandler(threadId: threadId)
@@ -949,6 +930,8 @@ final class ChatViewModel {
 
                     self.structuredHistory = snapshot
                     self.loadedStructuredHistoryKey = loadKey
+                    let threadSource = self.threadInfo?.source
+                    logger.info("[UI] Loaded structured history: \(snapshot.items.count) items, threadSource: \(String(describing: threadSource))")
                     self.structuredHistoryVisibleCount = min(
                         snapshot.items.count,
                         max(
@@ -965,6 +948,55 @@ final class ChatViewModel {
             structuredHistory = .empty
             structuredHistoryVisibleCount = 0
         }
+    }
+
+    private func appendStreamingText(_ text: String) {
+        streamingResponseBuffer.append(text)
+        scheduleStreamingFlushIfNeeded()
+    }
+
+    private func updateThinkingText(_ text: String) {
+        guard !text.isEmpty else { return }
+        pendingThinkingText = text
+        scheduleStreamingFlushIfNeeded()
+    }
+
+    private func scheduleStreamingFlushIfNeeded() {
+        guard streamingFlushTask == nil else { return }
+
+        streamingFlushTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: StreamingResponseBuffer.flushIntervalNanoseconds)
+            guard !Task.isCancelled else { return }
+            self?.flushPendingStreamUpdates()
+        }
+    }
+
+    private func flushPendingStreamUpdates() {
+        streamingFlushTask = nil
+
+        if let pendingThinkingText {
+            currentThinkingText = pendingThinkingText
+            self.pendingThinkingText = nil
+        }
+
+        if streamingResponseBuffer.flush() {
+            currentStreamingText = streamingResponseBuffer.committedText
+        }
+    }
+
+    private func flushPendingStreamUpdatesImmediately() {
+        streamingFlushTask?.cancel()
+        streamingFlushTask = nil
+        flushPendingStreamUpdates()
+    }
+
+    private func resetStreamingState() {
+        streamingFlushTask?.cancel()
+        streamingFlushTask = nil
+        pendingThinkingText = nil
+        streamingResponseBuffer.reset()
+        currentStreamingText = ""
+        currentThinkingText = ""
     }
 
     private func handleLocalCommand(
@@ -984,8 +1016,7 @@ final class ChatViewModel {
 
             case .clear:
                 await cliManager.stopSession(threadId: threadId)
-                currentStreamingText = ""
-                currentThinkingText = ""
+                resetStreamingState()
                 isProcessing = false
                 isStreaming = false
                 error = nil

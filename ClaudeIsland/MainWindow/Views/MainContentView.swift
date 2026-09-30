@@ -10,6 +10,7 @@ import SwiftUI
 import SwiftData
 
 struct MainContentView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sidebarVM = SidebarViewModel()
     @State private var chatVM: ChatViewModel
 
@@ -36,21 +37,37 @@ struct MainContentView: View {
                 ZStack {
                     if let threadId = sidebarVM.selectedThreadId {
                         ChatContentView(viewModel: chatVM, threadId: threadId)
-                            .id("chat-\(threadId)")
+                            .id(MainWindowDetailIdentitySupport.identity(for: threadId))
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .transition(MainWindowTheme.detailSwapTransition)
+                            .transition(
+                                MainWindowTheme.adaptiveTransition(
+                                    MainWindowTheme.detailSwapTransition,
+                                    reduceMotion: reduceMotion
+                                )
+                            )
                     } else {
                         WelcomeView(onNewChat: { path in
                             Task {
                                 _ = await sidebarVM.createNewThread(projectPath: path)
                             }
                         })
-                        .id("welcome")
+                        .id(MainWindowDetailIdentitySupport.identity(for: nil))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .transition(MainWindowTheme.detailSwapTransition)
+                        .transition(
+                            MainWindowTheme.adaptiveTransition(
+                                MainWindowTheme.detailSwapTransition,
+                                reduceMotion: reduceMotion
+                            )
+                        )
                     }
                 }
-                .animation(MainWindowTheme.contentSwapAnimation, value: sidebarVM.selectedThreadId)
+                .animation(
+                    MainWindowTheme.adaptiveAnimation(
+                        MainWindowTheme.contentSwapAnimation,
+                        reduceMotion: reduceMotion
+                    ),
+                    value: sidebarVM.selectedThreadId
+                )
             }
             .background(MainWindowTheme.workspace)
             .clipShape(RoundedRectangle(cornerRadius: 0, style: .continuous))

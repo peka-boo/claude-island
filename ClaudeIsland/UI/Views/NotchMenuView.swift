@@ -18,7 +18,7 @@ struct NotchMenuView: View {
     @ObservedObject private var updateManager = UpdateManager.shared
     @ObservedObject private var screenSelector = ScreenSelector.shared
     @ObservedObject private var soundSelector = SoundSelector.shared
-    @State private var hooksInstalled: Bool = false
+    @State private var hookMonitorEnabled: Bool = AppSettings.hookMonitorEnabled
     @State private var launchAtLogin: Bool = false
 
     var body: some View {
@@ -64,16 +64,24 @@ struct NotchMenuView: View {
 
             MenuToggleRow(
                 icon: "arrow.triangle.2.circlepath",
-                label: "Hooks",
-                isOn: hooksInstalled
+                label: "Hook Monitor",
+                isOn: hookMonitorEnabled
             ) {
-                if hooksInstalled {
-                    HookInstaller.uninstall()
-                    hooksInstalled = false
-                } else {
-                    HookInstaller.installIfNeeded()
-                    hooksInstalled = true
-                }
+                let newValue = !hookMonitorEnabled
+                HookMonitorCoordinator.setEnabled(
+                    newValue,
+                    persist: { enabled in
+                        AppSettings.setHookMonitorEnabled(enabled)
+                    },
+                    installHooks: {
+                        HookInstaller.installIfNeeded()
+                    },
+                    uninstallHooks: {
+                        HookInstaller.uninstall()
+                    },
+                    monitorController: ClaudeSessionMonitor.shared
+                )
+                hookMonitorEnabled = newValue
             }
 
             AccessibilityRow(isEnabled: AXIsProcessTrusted())
@@ -117,10 +125,13 @@ struct NotchMenuView: View {
                 refreshStates()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .hookMonitorToggled)) { _ in
+            refreshStates()
+        }
     }
 
     private func refreshStates() {
-        hooksInstalled = HookInstaller.isInstalled()
+        hookMonitorEnabled = AppSettings.hookMonitorEnabled
         launchAtLogin = SMAppService.mainApp.status == .enabled
         screenSelector.refreshScreens()
     }

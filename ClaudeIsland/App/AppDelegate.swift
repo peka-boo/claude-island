@@ -70,13 +70,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Show in Dock (main window app)
         NSApplication.shared.setActivationPolicy(.regular)
 
-        // Hook system — install if Hook Monitor is enabled
-        if AppSettings.hookMonitorEnabled {
-            HookInstaller.installIfNeeded()
-        }
-
         Task { @MainActor in
-            ClaudeSessionMonitor.shared.startMonitoring()
+            HookMonitorCoordinator.apply(
+                enabled: AppSettings.hookMonitorEnabled,
+                installHooks: HookInstaller.installIfNeeded,
+                uninstallHooks: HookInstaller.uninstall,
+                monitorController: ClaudeSessionMonitor.shared
+            )
         }
 
         _ = ClaudeHookPopupManager.shared
@@ -149,13 +149,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ) { notification in
             let enabled = notification.userInfo?["enabled"] as? Bool ?? false
             Task { @MainActor in
-                if enabled {
-                    HookInstaller.installIfNeeded()
-                    ClaudeSessionMonitor.shared.startMonitoring()
-                } else {
-                    // TODO: Uninstall hooks when implemented
-                    ClaudeSessionMonitor.shared.stopMonitoring()
-                }
+                HookMonitorCoordinator.apply(
+                    enabled: enabled,
+                    installHooks: HookInstaller.installIfNeeded,
+                    uninstallHooks: HookInstaller.uninstall,
+                    monitorController: ClaudeSessionMonitor.shared
+                )
             }
         }
     }
